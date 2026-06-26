@@ -24,12 +24,15 @@ impl ActiveConnections {
     }
 
     pub(super) fn display_wifi_name(&self) -> String {
-        if let Some(ssid) = &self.wifi.ssid {
-            return ssid.clone();
-        }
-
+        // A connection we initiated takes precedence: the network we are
+        // connecting to is the active connection, even while IWD still reports
+        // the previous network as connected during the brief transition.
         if let Some(connecting) = &self.connection.ssid {
             return connecting.clone();
+        }
+
+        if let Some(ssid) = &self.wifi.ssid {
+            return ssid.clone();
         }
 
         t!("dropdown-iwd-wifi")

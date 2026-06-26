@@ -32,6 +32,7 @@ impl AvailableNetworks {
     ) {
         self.state = ListState::Normal;
         self.clear_selection();
+        self.rebuild_network_list();
         let _ = sender.output(AvailableNetworksOutput::ConnectionFailed(message));
     }
 
@@ -53,6 +54,12 @@ impl AvailableNetworks {
         let secured = selection.secured;
         self.state = ListState::Connecting;
         let _ = sender.output(AvailableNetworksOutput::Connecting(ssid));
+
+        // Entering the connecting state changes which SSID is "active" (now the
+        // connecting target) without any change to `station.networks`, so no
+        // list refresh would otherwise fire. Rebuild now so the target leaves
+        // the available list and the previously connected network reappears.
+        self.rebuild_network_list();
 
         sender.command(move |out, _shutdown| async move {
             // If the user supplied a passphrase (e.g. retrying after an auth
@@ -112,14 +119,14 @@ impl AvailableNetworks {
             self.clear_selection();
         }
 
-        self.rebuild_network_list(None);
+        self.rebuild_network_list();
     }
 
     pub(super) fn handle_wifi_enabled(&mut self, enabled: bool, sender: &ComponentSender<Self>) {
         self.powered = enabled;
 
         if enabled {
-            self.rebuild_network_list(None);
+            self.rebuild_network_list();
             return;
         }
 
@@ -134,9 +141,30 @@ impl AvailableNetworks {
         self.clear_selection();
     }
 
-    pub(super) fn rebuild_network_list(&mut self, connected_ssid: Option<&str>) {
+    /// The SSID currently shown as the Active Connection, and therefore excluded
+    /// from the available list: the network we are connecting to while a
+    /// connection is in progress, otherwise the connected network. This mirrors
+    /// the active-connection card, which favours the in-progress target over the
+    /// network IWD still reports as connected during the transition.
+    fn active_ssid(&self) -> Option<String> {
+        if self.state == ListState::Connecting
+            && let Some(selection) = &self.selection
+        {
+            return Some(selection.ssid.clone());
+        }
+
+        self.iwd
+            .station
+            .get()
+            .and_then(|station| station.connected_ssid.get())
+    }
+
+    pub(super) fn rebuild_network_list(&mut self) {
+        let active_ssid = self.active_ssid();
         let snapshots = match self.iwd.station.get() {
-            Some(station) => helpers::unique_networks(&station.networks.get(), connected_ssid),
+            Some(station) => {
+                helpers::unique_networks(&station.networks.get(), active_ssid.as_deref())
+            }
             None => vec![],
         };
 

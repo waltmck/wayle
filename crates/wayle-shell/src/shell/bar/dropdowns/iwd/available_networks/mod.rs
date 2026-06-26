@@ -205,7 +205,7 @@ impl Component for AvailableNetworks {
             watchers::spawn(&sender, &station, token);
         }
 
-        model.rebuild_network_list(None);
+        model.rebuild_network_list();
 
         let password_form_widget = model.password_form.widget();
         let network_list_widget = model.network_list.widget();
@@ -243,22 +243,18 @@ impl Component for AvailableNetworks {
     ) {
         match msg {
             AvailableNetworksCmd::NetworksChanged => {
-                let connected_ssid = self
-                    .iwd
-                    .station
-                    .get()
-                    .and_then(|station| station.connected_ssid.get());
-
-                self.rebuild_network_list(connected_ssid.as_deref());
+                self.rebuild_network_list();
             }
             AvailableNetworksCmd::ConnectionActivated => {
                 self.state = ListState::Normal;
                 self.clear_selection();
+                self.rebuild_network_list();
 
                 let _ = sender.output(AvailableNetworksOutput::Connected);
             }
             AvailableNetworksCmd::ConnectionAuthFailed => {
                 self.state = ListState::PasswordEntry;
+                self.rebuild_network_list();
 
                 let _ = sender.output(AvailableNetworksOutput::ClearConnecting);
 

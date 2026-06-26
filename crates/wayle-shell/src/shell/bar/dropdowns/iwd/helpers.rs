@@ -40,7 +40,8 @@ pub(crate) fn requires_password(security: SecurityType) -> bool {
 }
 
 /// Deduplicates networks by SSID and filters out hidden networks, enterprise
-/// networks, and the currently connected SSID.
+/// networks, and the active SSID (the network shown in the active-connection
+/// card — either the connected network or the in-progress connecting target).
 ///
 /// The input is expected to already be ordered strongest-first (as
 /// `Station.GetOrderedNetworks` returns it), and that order is preserved — like
@@ -48,7 +49,7 @@ pub(crate) fn requires_password(security: SecurityType) -> bool {
 /// bucket.
 pub(crate) fn unique_networks(
     networks: &[Arc<Network>],
-    connected_ssid: Option<&str>,
+    active_ssid: Option<&str>,
 ) -> Vec<NetworkSnapshot> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut snapshots: Vec<NetworkSnapshot> = Vec::new();
@@ -64,7 +65,7 @@ pub(crate) fn unique_networks(
             continue;
         }
 
-        if connected_ssid.is_some_and(|connected| connected == ssid) {
+        if active_ssid.is_some_and(|active| active == ssid) {
             continue;
         }
 

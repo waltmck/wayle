@@ -1,0 +1,26 @@
+[package]
+name = "wayle-iwd"
+description = "WiFi management via IWD (net.connman.iwd)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+name = "wayle_iwd"
+path = "src/lib.rs"
+
+[dependencies]
+futures.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+wayle-core.workspace = true
+wayle-traits.workspace = true
+zbus.workspace = true
+
+[lints]
+workspace = true

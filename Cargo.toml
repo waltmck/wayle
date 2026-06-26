@@ -6,6 +6,7 @@ members = [
 	"crates/wayle-i18n",
 	"crates/wayle-icons",
 	"crates/wayle-idle-inhibit",
+	"crates/wayle-iwd",
 	"crates/wayle-ipc",
 	"crates/wayle-settings",
 	"crates/wayle-shell",
@@ -119,6 +120,7 @@ wayle-derive = { path = "crates/wayle-derive" }
 wayle-i18n = { path = "crates/wayle-i18n" }
 wayle-icons = { path = "crates/wayle-icons" }
 wayle-idle-inhibit = { path = "crates/wayle-idle-inhibit" }
+wayle-iwd = { path = "crates/wayle-iwd" }
 wayle-ipc = { path = "crates/wayle-ipc" }
 wayle-shell = { path = "crates/wayle-shell" }
 wayle-styling = { path = "crates/wayle-styling" }

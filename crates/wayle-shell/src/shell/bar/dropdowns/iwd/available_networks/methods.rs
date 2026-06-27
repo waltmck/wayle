@@ -1,6 +1,6 @@
 use relm4::prelude::*;
 use tracing::warn;
-use wayle_iwd::SecurityType;
+use wayle_iwd::{Error, SecurityType};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::{
@@ -81,15 +81,18 @@ impl AvailableNetworks {
                 Ok(()) => {
                     let _ = out.send(AvailableNetworksCmd::ConnectionActivated);
                 }
+                Err(Error::ConnectionFailed) if secured => {
+                    // IWD reports a rejected passphrase only as the generic
+                    // `Failed` error, so re-prompt for the password. Every other
+                    // error (Aborted, Timeout, NoAgent, NotConfigured, ...) falls
+                    // through to the generic message below and never re-prompts.
+                    let _ = out.send(AvailableNetworksCmd::ConnectionAuthFailed);
+                }
                 Err(err) => {
                     warn!(error = %err, "iwd connection failed");
-                    if secured {
-                        let _ = out.send(AvailableNetworksCmd::ConnectionAuthFailed);
-                    } else {
-                        let _ = out.send(AvailableNetworksCmd::ConnectionFailed(t!(
-                            "dropdown-iwd-error-generic"
-                        )));
-                    }
+                    let _ = out.send(AvailableNetworksCmd::ConnectionFailed(t!(
+                        "dropdown-iwd-error-generic"
+                    )));
                 }
             }
         });
@@ -177,6 +180,24 @@ impl AvailableNetworks {
             guard.push_back(NetworkItemInit {
                 snapshot: snapshot.clone(),
             });
+        }
+    }
+
+    /// Dismiss the password prompt if the network it targets has dropped out of
+    /// the list (e.g. it was no longer seen in a rescan). The password form is
+    /// hidden by its `state == PasswordEntry` visibility binding.
+    pub(super) fn dismiss_password_entry_if_network_gone(&mut self) {
+        if self.state != ListState::PasswordEntry {
+            return;
+        }
+
+        let Some(ssid) = self.selection.as_ref().map(|selection| selection.ssid.clone()) else {
+            return;
+        };
+
+        if !self.ap_cache.iter().any(|network| network.ssid == ssid) {
+            self.state = ListState::Normal;
+            self.clear_selection();
         }
     }
 

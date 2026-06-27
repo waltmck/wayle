@@ -42,6 +42,12 @@ pub(crate) fn is_real_path(path: &OwnedObjectPath) -> bool {
     !s.is_empty() && s != "/"
 }
 
+/// Whether a D-Bus error is the named IWD method error (e.g.
+/// `net.connman.iwd.Failed`).
+fn is_iwd_error(err: &zbus::Error, name: &str) -> bool {
+    matches!(err, zbus::Error::MethodError(error_name, _, _) if error_name.as_str() == name)
+}
+
 /// A WiFi station: connection state, scan results, and controls.
 #[derive(Clone)]
 pub struct Station {
@@ -180,9 +186,15 @@ impl Station {
         let result = proxy.connect().await;
         self.passphrases.discard(&network_path);
 
-        result.map_err(|e| Error::OperationFailed {
-            operation: "connect to network",
-            source: e.into(),
+        result.map_err(|e| {
+            if is_iwd_error(&e, "net.connman.iwd.Failed") {
+                Error::ConnectionFailed
+            } else {
+                Error::OperationFailed {
+                    operation: "connect to network",
+                    source: e.into(),
+                }
+            }
         })
     }
 

@@ -58,6 +58,7 @@ pub(super) struct ConnectionProgress {
 #[derive(Debug)]
 pub(crate) enum ActiveConnectionsInput {
     DisconnectWifi,
+    CancelWifi,
     ForgetWifi,
     DismissError,
     WifiCardHovered(bool),

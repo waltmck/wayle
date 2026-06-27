@@ -4,6 +4,10 @@ use tracing::warn;
 use super::ActiveConnections;
 use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
 
+/// Icon shown while a connection is being established — the same "acquiring"
+/// icon the bar module displays during a connection.
+const CONNECTING_ICON: &str = "network-wireless-acquiring-symbolic";
+
 impl ActiveConnections {
     pub(super) fn has_wifi_error(&self) -> bool {
         self.connection.error.is_some() && !self.wifi.connected
@@ -11,6 +15,11 @@ impl ActiveConnections {
 
     pub(super) fn is_wifi_connecting(&self) -> bool {
         self.connection.ssid.is_some() || self.wifi.connecting
+    }
+
+    /// Whether a connection is actively in progress and has not errored.
+    pub(super) fn is_connecting(&self) -> bool {
+        self.is_wifi_connecting() && self.connection.error.is_none()
     }
 
     pub(super) fn update_has_connections(&mut self) {
@@ -93,6 +102,10 @@ impl ActiveConnections {
             return "network-wireless-offline-symbolic";
         }
 
+        if self.is_connecting() {
+            return CONNECTING_ICON;
+        }
+
         self.wifi.icon
     }
 
@@ -109,7 +122,13 @@ impl ActiveConnections {
 
     pub(super) fn forget_wifi(&self, sender: &ComponentSender<Self>) {
         let iwd = self.iwd.clone();
-        let ssid = self.wifi.ssid.clone();
+        // While connecting, the active connection is the in-progress target;
+        // otherwise it is the connected network.
+        let ssid = self
+            .connection
+            .ssid
+            .clone()
+            .or_else(|| self.wifi.ssid.clone());
 
         sender.command(|_out, _shutdown| async move {
             let Some(ssid) = ssid else {

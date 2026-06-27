@@ -244,6 +244,7 @@ impl Component for AvailableNetworks {
         match msg {
             AvailableNetworksCmd::NetworksChanged => {
                 self.rebuild_network_list();
+                self.dismiss_password_entry_if_network_gone();
             }
             AvailableNetworksCmd::ConnectionActivated => {
                 self.state = ListState::Normal;

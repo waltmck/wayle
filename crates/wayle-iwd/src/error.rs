@@ -15,6 +15,15 @@ pub enum Error {
     #[error("object not found at path: {0}")]
     ObjectNotFound(OwnedObjectPath),
 
+    /// A connection attempt failed for an unspecified reason — IWD's generic
+    /// `net.connman.iwd.Failed`. For a secured network this most commonly means
+    /// the passphrase was rejected (IWD exposes no dedicated auth-failure
+    /// error), but it can also cover other failures such as an AP refusing the
+    /// association. Every other failure (including an aborted connection) maps
+    /// to [`Error::OperationFailed`] instead.
+    #[error("connection failed")]
+    ConnectionFailed,
+
     /// A network operation failed.
     #[error("cannot {operation}")]
     OperationFailed {

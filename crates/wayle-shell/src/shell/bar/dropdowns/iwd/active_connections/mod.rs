@@ -186,9 +186,37 @@ impl Component for ActiveConnections {
                             },
                         },
 
+                        add_named[Some("cancel-actions")] = &gtk::Box {
+                            add_css_class: "network-connection-actions",
+                            set_halign: gtk::Align::End,
+                            set_valign: gtk::Align::Center,
+
+                            #[template]
+                            GhostButton {
+                                add_css_class: "network-action-disconnect",
+                                #[template_child]
+                                label {
+                                    set_label: &t!("dropdown-iwd-cancel"),
+                                },
+                                connect_clicked => ActiveConnectionsInput::CancelWifi,
+                            },
+
+                            #[template]
+                            GhostButton {
+                                add_css_class: "network-action-forget",
+                                #[template_child]
+                                label {
+                                    set_label: &t!("dropdown-iwd-forget"),
+                                },
+                                connect_clicked => ActiveConnectionsInput::ForgetWifi,
+                            },
+                        },
+
                         #[watch]
                         set_visible_child_name:
-                            if model.wifi.hovered && model.wifi.connected {
+                            if model.wifi.hovered && model.is_connecting() {
+                                "cancel-actions"
+                            } else if model.wifi.hovered && model.wifi.connected {
                                 "actions"
                             } else if model.wifi.hovered && model.has_wifi_error() {
                                 "error-actions"
@@ -248,7 +276,22 @@ impl Component for ActiveConnections {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
             ActiveConnectionsInput::DisconnectWifi => self.disconnect_wifi(&sender),
-            ActiveConnectionsInput::ForgetWifi => self.forget_wifi(&sender),
+            ActiveConnectionsInput::CancelWifi => {
+                // Stop the in-progress connection. Clearing the display first
+                // drops the SSID context, so the resulting (aborted) failure is
+                // not surfaced as an error by `SetConnectionError` below.
+                self.connection = ConnectionProgress::default();
+                self.update_has_connections();
+                self.disconnect_wifi(&sender);
+            }
+            ActiveConnectionsInput::ForgetWifi => {
+                // `forget_wifi` captures its target synchronously, so call it
+                // before clearing the connecting display — that way a forget
+                // mid-connect still targets the network being connected to.
+                self.forget_wifi(&sender);
+                self.connection = ConnectionProgress::default();
+                self.update_has_connections();
+            }
             ActiveConnectionsInput::DismissError => {
                 self.connection.error = None;
                 self.update_has_connections();
@@ -263,7 +306,12 @@ impl Component for ActiveConnections {
                 self.connection.ssid = None;
             }
             ActiveConnectionsInput::SetConnectionError(error) => {
-                self.connection.error = Some(error);
+                // Only surface a failure while a connection attempt is still
+                // active. When it was stopped via Cancel/Forget (which clear the
+                // SSID), the trailing failure is dropped instead of shown.
+                if self.connection.ssid.is_some() {
+                    self.connection.error = Some(error);
+                }
             }
             ActiveConnectionsInput::ClearConnectionError => {
                 self.connection.error = None;

@@ -164,12 +164,20 @@ impl AvailableNetworks {
 
     pub(super) fn rebuild_network_list(&mut self) {
         let active_ssid = self.active_ssid();
-        let snapshots = match self.iwd.station.get() {
+        let mut snapshots = match self.iwd.station.get() {
             Some(station) => {
                 helpers::unique_networks(&station.networks.get(), active_ssid.as_deref())
             }
             None => vec![],
         };
+
+        // While entering a password, hide the targeted network too — it is shown
+        // in the password form, not the available list.
+        if self.state == ListState::PasswordEntry
+            && let Some(selection) = &self.selection
+        {
+            snapshots.retain(|network| network.ssid != selection.ssid);
+        }
 
         self.ap_cache = snapshots;
 
@@ -195,7 +203,17 @@ impl AvailableNetworks {
             return;
         };
 
-        if !self.ap_cache.iter().any(|network| network.ssid == ssid) {
+        // Check the raw scan results, not the displayed list: the prompted
+        // network is intentionally filtered out of the list while its form is up.
+        let still_visible = self.iwd.station.get().is_some_and(|station| {
+            station
+                .networks
+                .get()
+                .iter()
+                .any(|network| network.ssid.get() == ssid)
+        });
+
+        if !still_visible {
             self.state = ListState::Normal;
             self.clear_selection();
         }
@@ -227,6 +245,9 @@ impl AvailableNetworks {
                 signal_icon,
                 error_message: None,
             });
+
+            // Drop the targeted network from the list now that it is in the form.
+            self.rebuild_network_list();
         } else {
             self.connect_to_selected(None, sender);
         }
@@ -244,6 +265,7 @@ impl AvailableNetworks {
             PasswordFormOutput::Cancel => {
                 self.state = ListState::Normal;
                 self.clear_selection();
+                self.rebuild_network_list();
             }
         }
     }

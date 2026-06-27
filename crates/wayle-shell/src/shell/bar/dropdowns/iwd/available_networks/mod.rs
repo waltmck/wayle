@@ -97,10 +97,14 @@ impl Component for AvailableNetworks {
 
             #[name = "empty_no_networks"]
             gtk::Box {
+                // Hidden during password entry: the list is empty only because
+                // the prompted network is shown in the form above, not because
+                // no networks exist.
                 #[watch]
                 set_visible: model.wifi_available
                     && model.powered
-                    && model.ap_cache.is_empty(),
+                    && model.ap_cache.is_empty()
+                    && model.state != ListState::PasswordEntry,
 
                 #[template]
                 EmptyState {

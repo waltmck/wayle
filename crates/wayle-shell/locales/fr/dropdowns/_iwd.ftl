@@ -24,7 +24,7 @@ dropdown-iwd-disabled-description = Activez le Wi-Fi avec l'interrupteur ci-dess
 
 dropdown-iwd-security-open = Ouvert
 dropdown-iwd-security-wep = WEP
-dropdown-iwd-security-wpa2 = WPA2
+dropdown-iwd-security-psk = PSK
 dropdown-iwd-security-enterprise = Entreprise
 dropdown-iwd-security-saved = { $security } · Enregistré
 

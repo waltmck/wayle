@@ -38,16 +38,18 @@ impl NetworkStatus {
 /// Security type classification for a network.
 ///
 /// Variants mirror `wayle-network`'s `SecurityType` for UI compatibility.
-/// IWD only distinguishes `open`, `wep`, `psk`, and `8021x`, so PSK networks
-/// are reported as [`SecurityType::Wpa2`].
+/// IWD only distinguishes `open`, `wep`, `psk`, and `8021x`. Its `psk` type
+/// covers WPA2 and WPA3 personal networks alike, so both are reported as the
+/// ambiguous [`SecurityType::Psk`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecurityType {
     /// No security (open network).
     None,
     /// WEP - deprecated and insecure.
     Wep,
-    /// WPA personal (PSK) - reported for all IWD `psk` networks.
-    Wpa2,
+    /// Pre-shared key (WPA2 or WPA3 personal) - reported for every IWD `psk`
+    /// network, which does not distinguish the two.
+    Psk,
     /// Enterprise security (802.1X).
     Enterprise,
 }
@@ -58,7 +60,7 @@ impl SecurityType {
     pub fn from_iwd_type(network_type: &str) -> Self {
         match network_type {
             "wep" => Self::Wep,
-            "psk" => Self::Wpa2,
+            "psk" => Self::Psk,
             "8021x" => Self::Enterprise,
             _ => Self::None,
         }
@@ -69,7 +71,7 @@ impl SecurityType {
         match self {
             Self::None => "Open",
             Self::Wep => "WEP",
-            Self::Wpa2 => "WPA2",
+            Self::Psk => "PSK",
             Self::Enterprise => "Enterprise",
         }
     }
@@ -132,7 +134,7 @@ mod tests {
     fn security_from_iwd_type() {
         assert_eq!(SecurityType::from_iwd_type("open"), SecurityType::None);
         assert_eq!(SecurityType::from_iwd_type("wep"), SecurityType::Wep);
-        assert_eq!(SecurityType::from_iwd_type("psk"), SecurityType::Wpa2);
+        assert_eq!(SecurityType::from_iwd_type("psk"), SecurityType::Psk);
         assert_eq!(SecurityType::from_iwd_type("8021x"), SecurityType::Enterprise);
         assert_eq!(SecurityType::from_iwd_type("other"), SecurityType::None);
     }

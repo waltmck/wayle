@@ -24,7 +24,7 @@ dropdown-iwd-disabled-description = Turn WiFi on with the switch above to see av
 
 dropdown-iwd-security-open = Open
 dropdown-iwd-security-wep = WEP
-dropdown-iwd-security-wpa2 = WPA2
+dropdown-iwd-security-psk = PSK
 dropdown-iwd-security-enterprise = Enterprise
 dropdown-iwd-security-saved = { $security } · Saved
 

@@ -258,7 +258,7 @@ pub(super) fn translate_security_type(security: SecurityType) -> String {
     match security {
         SecurityType::None => t!("dropdown-iwd-security-open"),
         SecurityType::Wep => t!("dropdown-iwd-security-wep"),
-        SecurityType::Wpa2 => t!("dropdown-iwd-security-wpa2"),
+        SecurityType::Psk => t!("dropdown-iwd-security-psk"),
         SecurityType::Enterprise => t!("dropdown-iwd-security-enterprise"),
     }
 }

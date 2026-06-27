@@ -106,7 +106,7 @@ mod tests {
     fn requires_password_logic() {
         assert!(!requires_password(SecurityType::None));
         assert!(!requires_password(SecurityType::Enterprise));
-        assert!(requires_password(SecurityType::Wpa2));
+        assert!(requires_password(SecurityType::Psk));
         assert!(requires_password(SecurityType::Wep));
     }
 

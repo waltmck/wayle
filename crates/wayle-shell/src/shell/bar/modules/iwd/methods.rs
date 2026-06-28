@@ -10,12 +10,10 @@ use crate::i18n::t;
 impl IwdModule {
     pub(super) fn compute_display(config: &IwdConfig, iwd: &IwdService) -> (String, String) {
         if let Some(station) = iwd.station.get() {
-            let ssid = station.connected_ssid.get();
             let ctx = WifiContext {
                 enabled: station.powered.get(),
-                connectivity: station.state.get(),
+                connection: station.connection.get(),
                 strength: station.strength.get(),
-                ssid: ssid.as_deref(),
             };
             (wifi_icon(config, &ctx), wifi_label(&ctx))
         } else {

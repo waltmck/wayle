@@ -13,7 +13,7 @@ pub(crate) struct IwdDropdownInit {
 #[derive(Debug)]
 pub(crate) enum IwdDropdownMsg {
     WifiToggled(bool),
-    /// Trigger a scan (from the Scan button, or when the dropdown opens).
+    /// Trigger a scan (from the Scan button).
     ScanRequested,
     AvailableNetworks(AvailableNetworksOutput),
 }

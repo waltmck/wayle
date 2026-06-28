@@ -1,24 +1,26 @@
 use wayle_config::schemas::modules::IwdConfig;
-use wayle_iwd::NetworkStatus;
+use wayle_iwd::ConnectionState;
 
 use crate::i18n::t;
 
-pub(crate) struct WifiContext<'a> {
+pub(crate) struct WifiContext {
     pub(crate) enabled: bool,
-    pub(crate) connectivity: NetworkStatus,
+    /// Attempt-aware connection state — the same source the dropdown card uses,
+    /// so the bar shows "connecting" throughout a switch instead of flickering to
+    /// "disconnected" while IWD's raw `State` passes through `disconnected`.
+    pub(crate) connection: ConnectionState,
     pub(crate) strength: Option<u8>,
-    pub(crate) ssid: Option<&'a str>,
 }
 
-pub(crate) fn wifi_icon(config: &IwdConfig, ctx: &WifiContext<'_>) -> String {
+pub(crate) fn wifi_icon(config: &IwdConfig, ctx: &WifiContext) -> String {
     if !ctx.enabled {
         return config.wifi_disabled_icon.get().clone();
     }
 
-    match ctx.connectivity {
-        NetworkStatus::Connecting => config.wifi_acquiring_icon.get().clone(),
-        NetworkStatus::Disconnected => config.wifi_offline_icon.get().clone(),
-        NetworkStatus::Connected => {
+    match ctx.connection {
+        ConnectionState::Connecting { .. } => config.wifi_acquiring_icon.get().clone(),
+        ConnectionState::Idle => config.wifi_offline_icon.get().clone(),
+        ConnectionState::Connected { .. } => {
             let icons = config.wifi_signal_icons.get();
             match ctx.strength {
                 Some(s) if !icons.is_empty() => {
@@ -34,14 +36,12 @@ pub(crate) fn wifi_icon(config: &IwdConfig, ctx: &WifiContext<'_>) -> String {
     }
 }
 
-pub(crate) fn wifi_label(ctx: &WifiContext<'_>) -> String {
-    match ctx.connectivity {
-        NetworkStatus::Connected => ctx
-            .ssid
-            .map(String::from)
-            .unwrap_or_else(|| t!("bar-iwd-wifi-fallback")),
-        NetworkStatus::Connecting => t!("bar-iwd-connecting"),
-        NetworkStatus::Disconnected => t!("bar-iwd-disconnected"),
+pub(crate) fn wifi_label(ctx: &WifiContext) -> String {
+    match &ctx.connection {
+        ConnectionState::Connected { ssid } if !ssid.is_empty() => ssid.clone(),
+        ConnectionState::Connected { .. } => t!("bar-iwd-wifi-fallback"),
+        ConnectionState::Connecting { .. } => t!("bar-iwd-connecting"),
+        ConnectionState::Idle => t!("bar-iwd-disconnected"),
     }
 }
 

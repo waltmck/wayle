@@ -89,8 +89,10 @@ impl AvailableNetworks {
             }
 
             match station.connect(network_path, password).await {
-                Ok(()) => {
-                    let _ = out.send(AvailableNetworksCmd::ConnectionActivated);
+                // Connected, or aborted (cancelled/superseded) — both just reset
+                // the list with no error on the card.
+                Ok(()) | Err(Error::ConnectionAborted) => {
+                    let _ = out.send(AvailableNetworksCmd::ConnectionSettled);
                 }
                 Err(Error::ConnectionFailed) if secured => {
                     // IWD reports a rejected passphrase only as the generic
@@ -98,11 +100,6 @@ impl AvailableNetworks {
                     // error (Timeout, NoAgent, NotConfigured, ...) falls through
                     // to the generic message below and never re-prompts.
                     let _ = out.send(AvailableNetworksCmd::ConnectionAuthFailed);
-                }
-                Err(Error::ConnectionAborted) => {
-                    // The user cancelled (or another connect superseded this one):
-                    // not a failure, so reset silently with no error on the card.
-                    let _ = out.send(AvailableNetworksCmd::ConnectionCancelled);
                 }
                 Err(err) => {
                     warn!(error = %err, "iwd connection failed");

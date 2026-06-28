@@ -31,11 +31,10 @@ mod proxy;
 mod service;
 /// WiFi station model and connection controls.
 pub mod station;
-/// Shared type definitions.
-pub mod types;
+mod types;
 
 pub use error::Error;
 pub use network::Network;
 pub use service::IwdService;
 pub use station::Station;
-pub use types::{ConnectionState, NetworkStatus, SecurityType};
+pub use types::{ConnectionState, SecurityType};

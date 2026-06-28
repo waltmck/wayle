@@ -1,7 +1,7 @@
 mod active_connections;
 mod available_networks;
 mod factory;
-pub(crate) mod helpers;
+mod helpers;
 mod messages;
 mod methods;
 mod password_form;

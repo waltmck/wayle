@@ -11,7 +11,7 @@ use wayle_widgets::{WatcherToken, prelude::*};
 
 use self::messages::{ActiveConnectionsCmd, ConnectionError, WifiState};
 pub(crate) use self::messages::{ActiveConnectionsInit, ActiveConnectionsInput};
-use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
+use crate::i18n::t;
 
 pub(crate) struct ActiveConnections {
     iwd: Arc<IwdService>,
@@ -310,7 +310,6 @@ impl Component for ActiveConnections {
                 self.wifi.connection = connection;
                 self.wifi.strength = strength;
                 self.wifi.frequency = frequency;
-                self.wifi.icon = helpers::signal_strength_icon(self.wifi.strength.unwrap_or(0));
             }
             ActiveConnectionsCmd::StationDeviceChanged => {
                 if self.iwd.station.get().is_none() {

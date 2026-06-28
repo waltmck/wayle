@@ -11,13 +11,9 @@ use zbus::{Connection, zvariant::OwnedObjectPath};
 use crate::{
     error::Error,
     proxy::{known_network::KnownNetworkProxy, network::NetworkProxy},
+    station::is_real_path,
     types::SecurityType,
 };
-
-fn is_real_path(path: &OwnedObjectPath) -> bool {
-    let s = path.as_str();
-    !s.is_empty() && s != "/"
-}
 
 /// A network visible to a station.
 #[derive(Clone)]

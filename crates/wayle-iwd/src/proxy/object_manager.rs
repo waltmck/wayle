@@ -8,7 +8,7 @@ use zbus::{
 };
 
 /// Map of object path -> interface name -> property name -> value.
-pub type ManagedObjects =
+pub(crate) type ManagedObjects =
     HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
 
 #[proxy(

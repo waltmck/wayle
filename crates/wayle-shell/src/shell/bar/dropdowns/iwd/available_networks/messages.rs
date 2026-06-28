@@ -31,10 +31,10 @@ pub(crate) enum AvailableNetworksCmd {
     /// The service connection state or the scan list changed; re-dismiss a stale
     /// password prompt and rebuild the list.
     NetworksChanged,
-    ConnectionActivated,
-    /// The attempt was aborted (cancelled via Disconnect, or superseded). Reset
-    /// the list without surfacing an error.
-    ConnectionCancelled,
+    /// The attempt reached a stable outcome with no error to show — connected
+    /// successfully, or aborted (cancelled via Disconnect / superseded). Reset
+    /// the list to normal browsing.
+    ConnectionSettled,
     ConnectionAuthFailed,
     ConnectionFailed(String),
 }

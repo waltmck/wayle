@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use wayle_iwd::{ConnectionState, IwdService, Station};
 
-use crate::shell::bar::dropdowns::iwd::helpers;
-
 pub(crate) struct ActiveConnectionsInit {
     pub iwd: Arc<IwdService>,
 }
@@ -13,19 +11,15 @@ pub(super) struct WifiState {
     /// truth for what the card shows as the active connection.
     pub connection: ConnectionState,
     pub strength: Option<u8>,
-    pub icon: &'static str,
     pub frequency: Option<u32>,
     pub hovered: bool,
 }
 
 impl WifiState {
     pub(super) fn from_station(station: &Station) -> Self {
-        let strength = station.strength.get();
-
         Self {
             connection: station.connection.get(),
-            strength,
-            icon: helpers::signal_strength_icon(strength.unwrap_or(0)),
+            strength: station.strength.get(),
             frequency: station.frequency.get(),
             hovered: false,
         }
@@ -37,7 +31,6 @@ impl Default for WifiState {
         Self {
             connection: ConnectionState::Idle,
             strength: None,
-            icon: helpers::signal_strength_icon(0),
             frequency: None,
             hovered: false,
         }

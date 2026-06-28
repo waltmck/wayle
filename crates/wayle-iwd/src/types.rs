@@ -5,45 +5,15 @@
 //! representation (string `Station.State`, string `Network.Type`,
 //! `100 x dBm` signal strength) instead of NetworkManager's.
 
-use std::fmt::{self, Display};
-
-/// Current network connectivity status.
-///
-/// Simplified view derived from IWD's `net.connman.iwd.Station` `State`
-/// property.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NetworkStatus {
-    /// Connected to a network.
-    Connected,
-    /// Establishing (or roaming between) a connection.
-    Connecting,
-    /// Not connected.
-    Disconnected,
-}
-
-impl NetworkStatus {
-    /// Maps IWD's `Station.State` string to a simplified status.
-    ///
-    /// IWD reports one of `connected`, `disconnected`, `connecting`,
-    /// `disconnecting`, or `roaming`.
-    pub fn from_iwd_state(state: &str) -> Self {
-        match state {
-            "connected" => Self::Connected,
-            "connecting" | "roaming" => Self::Connecting,
-            _ => Self::Disconnected,
-        }
-    }
-}
-
 /// Connection-attempt-aware view of what the station is doing with respect to a
-/// specific network.
+/// specific network — the single reactive state model for the "active
+/// connection" UI.
 ///
-/// IWD's raw [`NetworkStatus`] does not name the *target* of an in-progress
-/// attempt (during a transition `Station.ConnectedNetwork` may still point at
-/// the previous network), and reports no failure as state. This type augments
-/// the raw status with the target SSID so a single reactive value can drive the
-/// UI's "active connection" view. It is purely the positive state; a failed
-/// attempt is surfaced via the `Result` returned by
+/// IWD's raw `net.connman.iwd.Station.State` does not name the *target* of an
+/// in-progress attempt (during a transition `Station.ConnectedNetwork` may still
+/// point at the previous network), and reports no failure as a state. This type
+/// augments the raw state with the target SSID. It is purely the positive state;
+/// a failed attempt is surfaced via the `Result` returned by
 /// [`Station::connect`](crate::Station::connect), not held here.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ConnectionState {
@@ -63,24 +33,13 @@ pub enum ConnectionState {
 }
 
 impl ConnectionState {
-    /// Derives a connection state from the collapsed [`NetworkStatus`] and
-    /// resolved SSID. Used where only the coarse status is on hand (construction,
-    /// power-on resync); the live driver prefers
-    /// [`from_raw_state`](Self::from_raw_state).
-    pub fn from_raw(status: NetworkStatus, connected_ssid: Option<String>) -> Self {
-        match (status, connected_ssid) {
-            (NetworkStatus::Connected, Some(ssid)) => Self::Connected { ssid },
-            (NetworkStatus::Connecting, Some(ssid)) => Self::Connecting { ssid },
-            _ => Self::Idle,
-        }
-    }
-
-    /// Derives a connection state from IWD's raw `Station.State` string and the
-    /// resolved `ConnectedNetwork` SSID. Unlike [`from_raw`](Self::from_raw) this
-    /// keeps IWD's finer distinctions: `roaming` is still `Connected` (you remain
-    /// associated to the same SSID while roaming between APs), and only the
-    /// terminal `disconnected` clears to `Idle`.
-    pub fn from_raw_state(state: &str, connected_ssid: Option<String>) -> Self {
+    /// Derives a connection state from IWD's raw `Station.State` string
+    /// (`connected` / `connecting` / `disconnecting` / `disconnected` /
+    /// `roaming`) and the resolved `ConnectedNetwork` SSID. `roaming` is treated
+    /// as `Connected` (you remain associated to the same SSID while roaming
+    /// between APs); only the terminal `disconnected`/`disconnecting` clear to
+    /// `Idle`.
+    pub(crate) fn from_raw_state(state: &str, connected_ssid: Option<String>) -> Self {
         match state {
             "connected" | "roaming" => {
                 connected_ssid.map_or(Self::Idle, |ssid| Self::Connected { ssid })
@@ -121,7 +80,7 @@ pub enum SecurityType {
 impl SecurityType {
     /// Derives the security type from IWD's `Network.Type` string
     /// (`open` / `wep` / `psk` / `8021x`).
-    pub fn from_iwd_type(network_type: &str) -> Self {
+    pub(crate) fn from_iwd_type(network_type: &str) -> Self {
         match network_type {
             "wep" => Self::Wep,
             "psk" => Self::Psk,
@@ -129,27 +88,11 @@ impl SecurityType {
             _ => Self::None,
         }
     }
-
-    /// Returns a human-readable string representation of the security type.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::None => "Open",
-            Self::Wep => "WEP",
-            Self::Psk => "PSK",
-            Self::Enterprise => "Enterprise",
-        }
-    }
-}
-
-impl Display for SecurityType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
 }
 
 /// Converts an IWD signal strength from `Station.GetOrderedNetworks` (reported as
 /// `100 * dBm`, e.g. `-6000` for -60 dBm, like iwgtk) to a 0-100 strength bucket.
-pub fn signal_to_percent(signal_100dbm: i16) -> u8 {
+pub(crate) fn signal_to_percent(signal_100dbm: i16) -> u8 {
     dbm_to_percent(i32::from(signal_100dbm) / 100)
 }
 
@@ -160,7 +103,7 @@ pub fn signal_to_percent(signal_100dbm: i16) -> u8 {
 ///
 /// Also used for the connected link's `RSSI` from
 /// `StationDiagnostic.GetDiagnostics` (already plain dBm).
-pub fn dbm_to_percent(dbm: i32) -> u8 {
+pub(crate) fn dbm_to_percent(dbm: i32) -> u8 {
     if dbm > -60 {
         100
     } else if dbm > -67 {
@@ -177,43 +120,6 @@ pub fn dbm_to_percent(dbm: i32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn status_from_iwd_state() {
-        assert_eq!(NetworkStatus::from_iwd_state("connected"), NetworkStatus::Connected);
-        assert_eq!(NetworkStatus::from_iwd_state("connecting"), NetworkStatus::Connecting);
-        assert_eq!(NetworkStatus::from_iwd_state("roaming"), NetworkStatus::Connecting);
-        assert_eq!(
-            NetworkStatus::from_iwd_state("disconnected"),
-            NetworkStatus::Disconnected
-        );
-        assert_eq!(
-            NetworkStatus::from_iwd_state("disconnecting"),
-            NetworkStatus::Disconnected
-        );
-        assert_eq!(NetworkStatus::from_iwd_state("garbage"), NetworkStatus::Disconnected);
-    }
-
-    #[test]
-    fn connection_state_from_raw() {
-        assert_eq!(
-            ConnectionState::from_raw(NetworkStatus::Connected, Some("net".into())),
-            ConnectionState::Connected { ssid: "net".into() }
-        );
-        assert_eq!(
-            ConnectionState::from_raw(NetworkStatus::Connecting, Some("net".into())),
-            ConnectionState::Connecting { ssid: "net".into() }
-        );
-        // No resolvable SSID, or disconnected, collapses to Idle.
-        assert_eq!(
-            ConnectionState::from_raw(NetworkStatus::Connected, None),
-            ConnectionState::Idle
-        );
-        assert_eq!(
-            ConnectionState::from_raw(NetworkStatus::Disconnected, Some("net".into())),
-            ConnectionState::Idle
-        );
-    }
 
     #[test]
     fn connection_state_from_raw_state() {

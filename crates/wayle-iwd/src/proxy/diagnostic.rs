@@ -8,7 +8,7 @@ use zbus::{proxy, zvariant::OwnedValue};
 ///
 /// Common keys include `RSSI` (i16 dBm), `Frequency` (u32 MHz),
 /// `RxBitrate`/`TxBitrate`, and `ConnectedBss`.
-pub type Diagnostics = HashMap<String, OwnedValue>;
+pub(crate) type Diagnostics = HashMap<String, OwnedValue>;
 
 #[proxy(
     default_service = "net.connman.iwd",

@@ -63,7 +63,10 @@ impl ActiveConnections {
     }
 
     pub(super) fn wifi_detail_visible(&self) -> bool {
-        self.has_wifi_error() || self.wifi.frequency.is_some()
+        // While connecting, `wifi.frequency` may still hold the *previous*
+        // network's band until fresh diagnostics arrive, so only show the band
+        // once actually connected.
+        self.has_wifi_error() || (self.is_connected() && self.wifi.frequency.is_some())
     }
 
     pub(super) fn wifi_detail(&self) -> String {
@@ -119,7 +122,7 @@ impl ActiveConnections {
             return CONNECTING_ICON;
         }
 
-        self.wifi.icon
+        helpers::signal_strength_icon(self.wifi.strength.unwrap_or(0))
     }
 
     pub(super) fn disconnect_wifi(&self, sender: &ComponentSender<Self>) {

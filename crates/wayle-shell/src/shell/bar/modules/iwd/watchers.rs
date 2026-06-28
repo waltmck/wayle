@@ -31,19 +31,13 @@ pub(super) fn spawn_station_watchers(
     };
 
     let powered = station.powered.clone();
-    let state = station.state.clone();
-    let ssid = station.connected_ssid.clone();
+    let connection = station.connection.clone();
     let strength = station.strength.clone();
 
     watch_cancellable!(
         sender,
         token,
-        [
-            powered.watch(),
-            state.watch(),
-            ssid.watch(),
-            strength.watch()
-        ],
+        [powered.watch(), connection.watch(), strength.watch()],
         |out| {
             let _ = out.send(IwdCmd::StateChanged);
         }

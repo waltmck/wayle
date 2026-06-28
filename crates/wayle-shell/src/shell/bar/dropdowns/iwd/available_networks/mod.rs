@@ -251,8 +251,7 @@ impl Component for AvailableNetworks {
                 self.dismiss_stale_password_entry();
                 self.rebuild_network_list();
             }
-            AvailableNetworksCmd::ConnectionActivated
-            | AvailableNetworksCmd::ConnectionCancelled => {
+            AvailableNetworksCmd::ConnectionSettled => {
                 self.state = ListState::Normal;
                 self.clear_selection();
                 self.rebuild_network_list();
@@ -262,21 +261,20 @@ impl Component for AvailableNetworks {
                 // event (WiFi toggled off, device removed) tore down the
                 // selection while the connect was in flight, don't orphan the
                 // list in PasswordEntry with no form — return to normal browsing.
-                if self.selection.is_some() {
-                    self.state = ListState::PasswordEntry;
-                    self.rebuild_network_list();
-
-                    if let Some(selection) = &self.selection {
-                        self.password_form.emit(PasswordFormInput::Show {
-                            ssid: selection.ssid.clone(),
-                            security_label: selection.security_label.clone(),
-                            signal_icon: selection.signal_icon,
-                            error_message: Some(t!("dropdown-iwd-error-wrong-password")),
-                        });
-                    }
+                self.state = if self.selection.is_some() {
+                    ListState::PasswordEntry
                 } else {
-                    self.state = ListState::Normal;
-                    self.rebuild_network_list();
+                    ListState::Normal
+                };
+                self.rebuild_network_list();
+
+                if let Some(selection) = &self.selection {
+                    self.password_form.emit(PasswordFormInput::Show {
+                        ssid: selection.ssid.clone(),
+                        security_label: selection.security_label.clone(),
+                        signal_icon: selection.signal_icon,
+                        error_message: Some(t!("dropdown-iwd-error-wrong-password")),
+                    });
                 }
             }
             AvailableNetworksCmd::ConnectionFailed(reason) => {

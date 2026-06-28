@@ -22,7 +22,7 @@ use crate::{
     error::Error,
     network::Network,
     proxy::{device::DeviceProxy, network::NetworkProxy, station::StationProxy},
-    types::{ConnectionState, NetworkStatus, signal_to_percent},
+    types::{ConnectionState, signal_to_percent},
 };
 
 #[doc(hidden)]
@@ -85,17 +85,13 @@ pub struct Station {
     pending_connects: Arc<AtomicUsize>,
     /// Whether the underlying device is powered on (the WiFi enable toggle).
     pub powered: Property<bool>,
-    /// Current connectivity status (raw IWD `Station.State`).
-    pub state: Property<NetworkStatus>,
     /// Attempt-aware connection state: the active or in-progress connection and
-    /// its target SSID. This is the single source of truth for the "active
-    /// connection" UI and knows the in-flight target during a transition, which
-    /// [`connected_ssid`](Self::connected_ssid) does not.
+    /// its target SSID. The single source of truth for the "active connection"
+    /// UI, reconciled from IWD's `Station.State` + `ConnectedNetwork` and from
+    /// foreground [`connect`](Self::connect) attempts.
     pub connection: Property<ConnectionState>,
     /// Whether a scan is in progress.
     pub scanning: Property<bool>,
-    /// SSID of the connected network, if any.
-    pub connected_ssid: Property<Option<String>>,
     /// Signal strength of the connected link (0-100), from diagnostics.
     pub strength: Property<Option<u8>>,
     /// Frequency of the connected link in MHz, from diagnostics.
@@ -141,7 +137,7 @@ impl Reactive for Station {
 
 impl Station {
     /// D-Bus object path of the station device.
-    pub fn object_path(&self) -> &OwnedObjectPath {
+    pub(crate) fn object_path(&self) -> &OwnedObjectPath {
         &self.object_path
     }
 
@@ -354,12 +350,11 @@ impl Station {
     pub(crate) async fn resync_after_power_on(&self) {
         let (state, scanning, connected_ssid) =
             read_station_state(&self.zbus_connection, &self.object_path).await;
-        self.state.set(state);
         self.scanning.set(scanning);
-        self.connected_ssid.set(connected_ssid.clone());
         // Just powered on: no foreground attempt can be in flight, so publish
         // directly from the re-read state.
-        self.connection.set(ConnectionState::from_raw(state, connected_ssid));
+        self.connection
+            .set(ConnectionState::from_raw_state(&state, connected_ssid));
         self.refresh_networks().await;
         // Best-effort fresh scan; ignored if the interface isn't ready yet.
         let _ = self.scan().await;
@@ -384,10 +379,10 @@ impl Station {
         let (state, scanning, connected_ssid) = if powered {
             read_station_state(connection, &path).await
         } else {
-            (NetworkStatus::Disconnected, false, None)
+            (String::new(), false, None)
         };
 
-        let connection_state = ConnectionState::from_raw(state, connected_ssid.clone());
+        let connection_state = ConnectionState::from_raw_state(&state, connected_ssid);
 
         Ok(Self {
             zbus_connection: connection.clone(),
@@ -396,10 +391,8 @@ impl Station {
             passphrases,
             pending_connects: Arc::new(AtomicUsize::new(0)),
             powered: Property::new(powered),
-            state: Property::new(state),
             connection: Property::new(connection_state),
             scanning: Property::new(scanning),
-            connected_ssid: Property::new(connected_ssid),
             strength: Property::new(None),
             frequency: Property::new(None),
             networks: Property::new(Vec::new()),
@@ -407,21 +400,17 @@ impl Station {
     }
 }
 
-/// Reads the `Station`-interface state (state / scanning / connected SSID),
-/// defaulting gracefully if the interface is absent (device powered off).
+/// Reads the `Station`-interface state (raw `State` string / scanning / connected
+/// SSID), defaulting gracefully if the interface is absent (device powered off).
 async fn read_station_state(
     connection: &Connection,
     path: &OwnedObjectPath,
-) -> (NetworkStatus, bool, Option<String>) {
+) -> (String, bool, Option<String>) {
     let Ok(station_proxy) = StationProxy::new(connection, path.clone()).await else {
-        return (NetworkStatus::Disconnected, false, None);
+        return (String::new(), false, None);
     };
 
-    let state = station_proxy
-        .state()
-        .await
-        .map(|s| NetworkStatus::from_iwd_state(&s))
-        .unwrap_or(NetworkStatus::Disconnected);
+    let state = station_proxy.state().await.unwrap_or_default();
     let scanning = station_proxy.scanning().await.unwrap_or(false);
     let connected_ssid = resolve_connected_ssid(connection, path).await;
 

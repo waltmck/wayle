@@ -3,7 +3,9 @@ use std::sync::Arc;
 use wayle_config::ConfigService;
 use wayle_iwd::IwdService;
 
-use super::available_networks::AvailableNetworksOutput;
+use super::{
+    active_connections::ActiveConnectionsOutput, available_networks::AvailableNetworksOutput,
+};
 
 pub(crate) struct IwdDropdownInit {
     pub iwd: Arc<IwdService>,
@@ -16,6 +18,7 @@ pub(crate) enum IwdDropdownMsg {
     /// Trigger a scan (from the Scan button, or when the dropdown opens).
     ScanRequested,
     AvailableNetworks(AvailableNetworksOutput),
+    ActiveConnections(ActiveConnectionsOutput),
 }
 
 #[derive(Debug)]

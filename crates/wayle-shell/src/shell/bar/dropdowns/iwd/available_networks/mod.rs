@@ -236,6 +236,18 @@ impl Component for AvailableNetworks {
             AvailableNetworksInput::PasswordForm(form_output) => {
                 self.handle_password_form(form_output, &sender);
             }
+            AvailableNetworksInput::AbortConnecting => {
+                // The card cancelled/forgot the in-progress connection. Reset to
+                // normal browsing now so the list stops excluding the target and
+                // a trailing connect result (incl. a spurious auth-fail) can't
+                // re-prompt. Self-contained: does not depend on the aborted
+                // connect reporting back.
+                if self.state == ListState::Connecting {
+                    self.state = ListState::Normal;
+                    self.clear_selection();
+                    self.rebuild_network_list();
+                }
+            }
         }
     }
 
@@ -247,8 +259,10 @@ impl Component for AvailableNetworks {
     ) {
         match msg {
             AvailableNetworksCmd::NetworksChanged => {
+                // Dismiss first so the rebuild reflects the post-dismiss state
+                // (e.g. another client connected to the prompted network).
+                self.dismiss_stale_password_entry();
                 self.rebuild_network_list();
-                self.dismiss_password_entry_if_network_gone();
             }
             AvailableNetworksCmd::ConnectionActivated => {
                 self.state = ListState::Normal;
@@ -258,18 +272,28 @@ impl Component for AvailableNetworks {
                 let _ = sender.output(AvailableNetworksOutput::Connected);
             }
             AvailableNetworksCmd::ConnectionAuthFailed => {
-                self.state = ListState::PasswordEntry;
-                self.rebuild_network_list();
-
                 let _ = sender.output(AvailableNetworksOutput::ClearConnecting);
 
-                if let Some(selection) = &self.selection {
-                    self.password_form.emit(PasswordFormInput::Show {
-                        ssid: selection.ssid.clone(),
-                        security_label: selection.security_label.clone(),
-                        signal_icon: selection.signal_icon,
-                        error_message: Some(t!("dropdown-iwd-error-wrong-password")),
-                    });
+                // Only re-prompt if the attempt is still current. If a backend
+                // event (WiFi toggled off, device removed) or a card-side
+                // Cancel/Forget tore down the selection while the connect was in
+                // flight, don't orphan the list in PasswordEntry with no form —
+                // return to normal browsing instead.
+                if self.selection.is_some() {
+                    self.state = ListState::PasswordEntry;
+                    self.rebuild_network_list();
+
+                    if let Some(selection) = &self.selection {
+                        self.password_form.emit(PasswordFormInput::Show {
+                            ssid: selection.ssid.clone(),
+                            security_label: selection.security_label.clone(),
+                            signal_icon: selection.signal_icon,
+                            error_message: Some(t!("dropdown-iwd-error-wrong-password")),
+                        });
+                    }
+                } else {
+                    self.state = ListState::Normal;
+                    self.rebuild_network_list();
                 }
             }
             AvailableNetworksCmd::ConnectionFailed(reason) => {

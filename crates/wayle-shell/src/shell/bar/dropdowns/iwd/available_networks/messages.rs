@@ -24,6 +24,9 @@ pub(crate) enum AvailableNetworksInput {
     NetworkSelected(usize),
     ForgetNetwork(OwnedObjectPath),
     PasswordForm(PasswordFormOutput),
+    /// The connection was stopped from the active-connection card (Cancel/Forget
+    /// while connecting); leave the Connecting state immediately.
+    AbortConnecting,
 }
 
 #[derive(Debug)]

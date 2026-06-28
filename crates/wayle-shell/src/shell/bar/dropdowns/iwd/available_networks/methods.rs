@@ -191,10 +191,12 @@ impl AvailableNetworks {
         }
     }
 
-    /// Dismiss the password prompt if the network it targets has dropped out of
-    /// the list (e.g. it was no longer seen in a rescan). The password form is
-    /// hidden by its `state == PasswordEntry` visibility binding.
-    pub(super) fn dismiss_password_entry_if_network_gone(&mut self) {
+    /// Dismiss the password prompt when it is no longer relevant: the target
+    /// network dropped out of the scan, or it became the active connection
+    /// (connecting or connected) — e.g. another client such as `iwctl` connected
+    /// to it under us. The password form is hidden by its `state ==
+    /// PasswordEntry` visibility binding.
+    pub(super) fn dismiss_stale_password_entry(&mut self) {
         if self.state != ListState::PasswordEntry {
             return;
         }
@@ -203,9 +205,11 @@ impl AvailableNetworks {
             return;
         };
 
-        // Check the raw scan results, not the displayed list: the prompted
-        // network is intentionally filtered out of the list while its form is up.
-        let still_visible = self.iwd.station.get().is_some_and(|station| {
+        let station = self.iwd.station.get();
+
+        // Gone from the scan results — checked against the raw networks, since
+        // the displayed list intentionally filters the prompted SSID out.
+        let still_visible = station.as_ref().is_some_and(|station| {
             station
                 .networks
                 .get()
@@ -213,7 +217,13 @@ impl AvailableNetworks {
                 .any(|network| network.ssid.get() == ssid)
         });
 
-        if !still_visible {
+        // Became the active connection via any client. `connected_ssid` is set
+        // for both the connecting and connected states.
+        let now_active = station
+            .and_then(|station| station.connected_ssid.get())
+            .is_some_and(|connected| connected == ssid);
+
+        if !still_visible || now_active {
             self.state = ListState::Normal;
             self.clear_selection();
         }

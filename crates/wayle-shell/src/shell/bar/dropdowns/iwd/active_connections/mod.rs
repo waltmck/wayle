@@ -10,7 +10,9 @@ use wayle_iwd::{IwdService, NetworkStatus};
 use wayle_widgets::{WatcherToken, prelude::*};
 
 use self::messages::{ActiveConnectionsCmd, ConnectionProgress, WifiState};
-pub(crate) use self::messages::{ActiveConnectionsInit, ActiveConnectionsInput};
+pub(crate) use self::messages::{
+    ActiveConnectionsInit, ActiveConnectionsInput, ActiveConnectionsOutput,
+};
 use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
 
 pub(crate) struct ActiveConnections {
@@ -25,7 +27,7 @@ pub(crate) struct ActiveConnections {
 impl Component for ActiveConnections {
     type Init = ActiveConnectionsInit;
     type Input = ActiveConnectionsInput;
-    type Output = ();
+    type Output = ActiveConnectionsOutput;
     type CommandOutput = ActiveConnectionsCmd;
 
     view! {
@@ -283,14 +285,22 @@ impl Component for ActiveConnections {
                 self.connection = ConnectionProgress::default();
                 self.update_has_connections();
                 self.disconnect_wifi(&sender);
+                // Tell the list to leave its Connecting state now, rather than
+                // relying on the aborted connect to report back (which may be
+                // delayed, or never arrive if the disconnect itself fails).
+                let _ = sender.output(ActiveConnectionsOutput::ConnectingStopped);
             }
             ActiveConnectionsInput::ForgetWifi => {
                 // `forget_wifi` captures its target synchronously, so call it
                 // before clearing the connecting display — that way a forget
                 // mid-connect still targets the network being connected to.
+                let was_connecting = self.connection.ssid.is_some();
                 self.forget_wifi(&sender);
                 self.connection = ConnectionProgress::default();
                 self.update_has_connections();
+                if was_connecting {
+                    let _ = sender.output(ActiveConnectionsOutput::ConnectingStopped);
+                }
             }
             ActiveConnectionsInput::DismissError => {
                 self.connection.error = None;
@@ -306,11 +316,27 @@ impl Component for ActiveConnections {
                 self.connection.ssid = None;
             }
             ActiveConnectionsInput::SetConnectionError(error) => {
-                // Only surface a failure while a connection attempt is still
+                // A failure only applies to a connection attempt that is still
                 // active. When it was stopped via Cancel/Forget (which clear the
                 // SSID), the trailing failure is dropped instead of shown.
                 if self.connection.ssid.is_some() {
-                    self.connection.error = Some(error);
+                    // Consult the LIVE backend state (not the cached
+                    // wifi.connected, which lags a watcher hop): if IWD reported
+                    // an error but never left the existing connection — e.g. it
+                    // rejected an empty/invalid passphrase outright — the backend
+                    // didn't move, so resync the card to it instead of showing
+                    // the failed target as the active connection.
+                    let backend_connected = self
+                        .iwd
+                        .station
+                        .get()
+                        .is_some_and(|station| station.connected_ssid.get().is_some());
+                    if backend_connected {
+                        self.connection = ConnectionProgress::default();
+                        self.update_has_connections();
+                    } else {
+                        self.connection.error = Some(error);
+                    }
                 }
             }
             ActiveConnectionsInput::ClearConnectionError => {

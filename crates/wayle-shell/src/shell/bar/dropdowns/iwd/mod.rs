@@ -16,7 +16,9 @@ use wayle_widgets::{WatcherToken, prelude::*};
 
 pub(super) use self::factory::Factory;
 use self::{
-    active_connections::{ActiveConnections, ActiveConnectionsInit, ActiveConnectionsInput},
+    active_connections::{
+        ActiveConnections, ActiveConnectionsInit, ActiveConnectionsInput, ActiveConnectionsOutput,
+    },
     available_networks::{
         AvailableNetworks, AvailableNetworksInit, AvailableNetworksInput, AvailableNetworksOutput,
     },
@@ -132,7 +134,7 @@ impl Component for IwdDropdown {
             .launch(ActiveConnectionsInit {
                 iwd: init.iwd.clone(),
             })
-            .detach();
+            .forward(sender.input_sender(), IwdDropdownMsg::ActiveConnections);
 
         let available_networks = AvailableNetworks::builder()
             .launch(AvailableNetworksInit {
@@ -200,6 +202,12 @@ impl Component for IwdDropdown {
                 AvailableNetworksOutput::ConnectionFailed(err) => {
                     self.active_connections
                         .emit(ActiveConnectionsInput::SetConnectionError(err));
+                }
+            },
+            IwdDropdownMsg::ActiveConnections(output) => match output {
+                ActiveConnectionsOutput::ConnectingStopped => {
+                    self.available_networks
+                        .emit(AvailableNetworksInput::AbortConnecting);
                 }
             },
         }

@@ -69,6 +69,14 @@ pub(crate) enum ActiveConnectionsInput {
 }
 
 #[derive(Debug)]
+pub(crate) enum ActiveConnectionsOutput {
+    /// The user stopped an in-progress connection from the card (Cancel/Forget
+    /// while connecting), so the available-networks list should leave its
+    /// Connecting state immediately rather than waiting on the aborted connect.
+    ConnectingStopped,
+}
+
+#[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum ActiveConnectionsCmd {
     WifiStateChanged {

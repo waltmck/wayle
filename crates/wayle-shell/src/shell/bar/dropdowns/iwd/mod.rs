@@ -16,9 +16,7 @@ use wayle_widgets::{WatcherToken, prelude::*};
 
 pub(super) use self::factory::Factory;
 use self::{
-    active_connections::{
-        ActiveConnections, ActiveConnectionsInit, ActiveConnectionsInput, ActiveConnectionsOutput,
-    },
+    active_connections::{ActiveConnections, ActiveConnectionsInit, ActiveConnectionsInput},
     available_networks::{
         AvailableNetworks, AvailableNetworksInit, AvailableNetworksInput, AvailableNetworksOutput,
     },
@@ -134,7 +132,7 @@ impl Component for IwdDropdown {
             .launch(ActiveConnectionsInit {
                 iwd: init.iwd.clone(),
             })
-            .forward(sender.input_sender(), IwdDropdownMsg::ActiveConnections);
+            .detach();
 
         let available_networks = AvailableNetworks::builder()
             .launch(AvailableNetworksInit {
@@ -181,33 +179,9 @@ impl Component for IwdDropdown {
                 self.request_scan(&sender);
             }
             IwdDropdownMsg::AvailableNetworks(output) => match output {
-                AvailableNetworksOutput::Connecting(ssid) => {
+                AvailableNetworksOutput::ConnectionFailed { ssid, message } => {
                     self.active_connections
-                        .emit(ActiveConnectionsInput::SetConnecting(ssid));
-                }
-
-                AvailableNetworksOutput::ClearConnecting => {
-                    self.active_connections
-                        .emit(ActiveConnectionsInput::ClearConnecting);
-                }
-
-                AvailableNetworksOutput::Connected => {
-                    self.active_connections
-                        .emit(ActiveConnectionsInput::ClearConnecting);
-
-                    self.active_connections
-                        .emit(ActiveConnectionsInput::ClearConnectionError);
-                }
-
-                AvailableNetworksOutput::ConnectionFailed(err) => {
-                    self.active_connections
-                        .emit(ActiveConnectionsInput::SetConnectionError(err));
-                }
-            },
-            IwdDropdownMsg::ActiveConnections(output) => match output {
-                ActiveConnectionsOutput::ConnectingStopped => {
-                    self.available_networks
-                        .emit(AvailableNetworksInput::AbortConnecting);
+                        .emit(ActiveConnectionsInput::ShowError { ssid, message });
                 }
             },
         }

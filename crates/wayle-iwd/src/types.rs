@@ -35,6 +35,70 @@ impl NetworkStatus {
     }
 }
 
+/// Connection-attempt-aware view of what the station is doing with respect to a
+/// specific network.
+///
+/// IWD's raw [`NetworkStatus`] does not name the *target* of an in-progress
+/// attempt (during a transition `Station.ConnectedNetwork` may still point at
+/// the previous network), and reports no failure as state. This type augments
+/// the raw status with the target SSID so a single reactive value can drive the
+/// UI's "active connection" view. It is purely the positive state; a failed
+/// attempt is surfaced via the `Result` returned by
+/// [`Station::connect`](crate::Station::connect), not held here.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ConnectionState {
+    /// Not connected and not attempting a connection.
+    #[default]
+    Idle,
+    /// Establishing (or roaming to) a connection to `ssid`.
+    Connecting {
+        /// SSID being connected to.
+        ssid: String,
+    },
+    /// Connected to `ssid`.
+    Connected {
+        /// SSID currently connected to.
+        ssid: String,
+    },
+}
+
+impl ConnectionState {
+    /// Derives a connection state from the collapsed [`NetworkStatus`] and
+    /// resolved SSID. Used where only the coarse status is on hand (construction,
+    /// power-on resync); the live driver prefers
+    /// [`from_raw_state`](Self::from_raw_state).
+    pub fn from_raw(status: NetworkStatus, connected_ssid: Option<String>) -> Self {
+        match (status, connected_ssid) {
+            (NetworkStatus::Connected, Some(ssid)) => Self::Connected { ssid },
+            (NetworkStatus::Connecting, Some(ssid)) => Self::Connecting { ssid },
+            _ => Self::Idle,
+        }
+    }
+
+    /// Derives a connection state from IWD's raw `Station.State` string and the
+    /// resolved `ConnectedNetwork` SSID. Unlike [`from_raw`](Self::from_raw) this
+    /// keeps IWD's finer distinctions: `roaming` is still `Connected` (you remain
+    /// associated to the same SSID while roaming between APs), and only the
+    /// terminal `disconnected` clears to `Idle`.
+    pub fn from_raw_state(state: &str, connected_ssid: Option<String>) -> Self {
+        match state {
+            "connected" | "roaming" => {
+                connected_ssid.map_or(Self::Idle, |ssid| Self::Connected { ssid })
+            }
+            "connecting" => connected_ssid.map_or(Self::Idle, |ssid| Self::Connecting { ssid }),
+            _ => Self::Idle,
+        }
+    }
+
+    /// The SSID of the active or in-progress connection, if any.
+    pub fn ssid(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::Connecting { ssid } | Self::Connected { ssid } => Some(ssid),
+        }
+    }
+}
+
 /// Security type classification for a network.
 ///
 /// Variants mirror `wayle-network`'s `SecurityType` for UI compatibility.
@@ -128,6 +192,49 @@ mod tests {
             NetworkStatus::Disconnected
         );
         assert_eq!(NetworkStatus::from_iwd_state("garbage"), NetworkStatus::Disconnected);
+    }
+
+    #[test]
+    fn connection_state_from_raw() {
+        assert_eq!(
+            ConnectionState::from_raw(NetworkStatus::Connected, Some("net".into())),
+            ConnectionState::Connected { ssid: "net".into() }
+        );
+        assert_eq!(
+            ConnectionState::from_raw(NetworkStatus::Connecting, Some("net".into())),
+            ConnectionState::Connecting { ssid: "net".into() }
+        );
+        // No resolvable SSID, or disconnected, collapses to Idle.
+        assert_eq!(
+            ConnectionState::from_raw(NetworkStatus::Connected, None),
+            ConnectionState::Idle
+        );
+        assert_eq!(
+            ConnectionState::from_raw(NetworkStatus::Disconnected, Some("net".into())),
+            ConnectionState::Idle
+        );
+    }
+
+    #[test]
+    fn connection_state_from_raw_state() {
+        let net = || Some(String::from("net"));
+        assert_eq!(
+            ConnectionState::from_raw_state("connected", net()),
+            ConnectionState::Connected { ssid: "net".into() }
+        );
+        // Roaming stays Connected, not Connecting.
+        assert_eq!(
+            ConnectionState::from_raw_state("roaming", net()),
+            ConnectionState::Connected { ssid: "net".into() }
+        );
+        assert_eq!(
+            ConnectionState::from_raw_state("connecting", net()),
+            ConnectionState::Connecting { ssid: "net".into() }
+        );
+        // Disconnecting/disconnected/unknown collapse to Idle.
+        assert_eq!(ConnectionState::from_raw_state("disconnecting", net()), ConnectionState::Idle);
+        assert_eq!(ConnectionState::from_raw_state("disconnected", None), ConnectionState::Idle);
+        assert_eq!(ConnectionState::from_raw_state("connected", None), ConnectionState::Idle);
     }
 
     #[test]

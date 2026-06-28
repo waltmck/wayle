@@ -1,5 +1,6 @@
 use relm4::ComponentSender;
 use tracing::warn;
+use wayle_iwd::ConnectionState;
 
 use super::ActiveConnections;
 use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
@@ -9,21 +10,24 @@ use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
 const CONNECTING_ICON: &str = "network-wireless-acquiring-symbolic";
 
 impl ActiveConnections {
+    /// Whether a failed attempt should be shown. Suppressed once the station is
+    /// on a connection again (e.g. IWD rejected a passphrase without leaving the
+    /// current network), so the card never shows a phantom failed target.
     pub(super) fn has_wifi_error(&self) -> bool {
-        self.connection.error.is_some() && !self.wifi.connected
+        self.error.is_some() && matches!(self.wifi.connection, ConnectionState::Idle)
     }
 
-    pub(super) fn is_wifi_connecting(&self) -> bool {
-        self.connection.ssid.is_some() || self.wifi.connecting
-    }
-
-    /// Whether a connection is actively in progress and has not errored.
     pub(super) fn is_connecting(&self) -> bool {
-        self.is_wifi_connecting() && self.connection.error.is_none()
+        matches!(self.wifi.connection, ConnectionState::Connecting { .. })
     }
 
-    pub(super) fn update_has_connections(&mut self) {
-        self.has_connections = self.wifi.connected || self.wifi.connecting;
+    pub(super) fn is_connected(&self) -> bool {
+        matches!(self.wifi.connection, ConnectionState::Connected { .. })
+    }
+
+    /// Whether the active-connection card should be shown at all.
+    pub(super) fn card_visible(&self) -> bool {
+        self.is_connecting() || self.is_connected() || self.has_wifi_error()
     }
 
     pub(super) fn reset_wifi_watchers(&mut self, sender: &ComponentSender<Self>) {
@@ -33,26 +37,25 @@ impl ActiveConnections {
     }
 
     pub(super) fn display_wifi_name(&self) -> String {
-        // A connection we initiated takes precedence: the network we are
-        // connecting to is the active connection, even while IWD still reports
-        // the previous network as connected during the brief transition.
-        if let Some(connecting) = &self.connection.ssid {
-            return connecting.clone();
+        if let Some(error) = &self.error
+            && self.has_wifi_error()
+        {
+            return error.ssid.clone();
         }
 
-        if let Some(ssid) = &self.wifi.ssid {
-            return ssid.clone();
+        if let Some(ssid) = self.wifi.connection.ssid() {
+            return ssid.to_string();
         }
 
         t!("dropdown-iwd-wifi")
     }
 
     pub(super) fn status_label(&self) -> String {
-        if self.connection.error.is_some() {
+        if self.has_wifi_error() {
             return t!("dropdown-iwd-error");
         }
 
-        if self.is_wifi_connecting() {
+        if self.is_connecting() {
             return t!("dropdown-iwd-connecting");
         }
 
@@ -60,12 +63,14 @@ impl ActiveConnections {
     }
 
     pub(super) fn wifi_detail_visible(&self) -> bool {
-        self.connection.error.is_some() || self.wifi.frequency.is_some()
+        self.has_wifi_error() || self.wifi.frequency.is_some()
     }
 
     pub(super) fn wifi_detail(&self) -> String {
-        if let Some(error) = &self.connection.error {
-            return error.clone();
+        if let Some(error) = &self.error
+            && self.has_wifi_error()
+        {
+            return error.message.clone();
         }
 
         self.wifi
@@ -73,6 +78,14 @@ impl ActiveConnections {
             .and_then(helpers::frequency_to_band)
             .map(str::to_string)
             .unwrap_or_default()
+    }
+
+    pub(super) fn error_tooltip(&self) -> Option<&str> {
+        if !self.has_wifi_error() {
+            return None;
+        }
+
+        self.error.as_ref().map(|error| error.message.as_str())
     }
 
     pub(super) fn wifi_detail_classes(&self) -> Vec<&'static str> {
@@ -122,13 +135,9 @@ impl ActiveConnections {
 
     pub(super) fn forget_wifi(&self, sender: &ComponentSender<Self>) {
         let iwd = self.iwd.clone();
-        // While connecting, the active connection is the in-progress target;
-        // otherwise it is the connected network.
-        let ssid = self
-            .connection
-            .ssid
-            .clone()
-            .or_else(|| self.wifi.ssid.clone());
+        // The active connection is the connecting target or the connected
+        // network — both carried by `connection`.
+        let ssid = self.wifi.connection.ssid().map(str::to_string);
 
         sender.command(|_out, _shutdown| async move {
             let Some(ssid) = ssid else {
@@ -159,9 +168,9 @@ impl ActiveConnections {
     pub(super) fn status_classes(&self) -> Vec<&'static str> {
         let mut classes = vec!["badge-subtle", "network-connection-status"];
 
-        if self.connection.error.is_some() {
+        if self.has_wifi_error() {
             classes.push("error");
-        } else if self.is_wifi_connecting() {
+        } else if self.is_connecting() {
             classes.push("warning");
         }
 

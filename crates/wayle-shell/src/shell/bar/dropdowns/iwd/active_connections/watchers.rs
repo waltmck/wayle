@@ -18,24 +18,17 @@ pub(super) fn spawn_wifi_watchers(
         return;
     };
 
-    let state = station.state.clone();
-    let ssid = station.connected_ssid.clone();
+    let connection = station.connection.clone();
     let strength = station.strength.clone();
     let frequency = station.frequency.clone();
 
     watch_cancellable!(
         sender,
         token,
-        [
-            state.watch(),
-            ssid.watch(),
-            strength.watch(),
-            frequency.watch()
-        ],
+        [connection.watch(), strength.watch(), frequency.watch()],
         |out| {
-            let _ = out.send(ActiveConnectionsCmd::WifiStateChanged {
-                connectivity: state.get(),
-                ssid: ssid.get(),
+            let _ = out.send(ActiveConnectionsCmd::WifiChanged {
+                connection: connection.get(),
                 strength: strength.get(),
                 frequency: frequency.get(),
             });

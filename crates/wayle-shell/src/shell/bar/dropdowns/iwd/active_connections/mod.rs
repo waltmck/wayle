@@ -6,20 +6,19 @@ use std::sync::Arc;
 
 use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
-use wayle_iwd::{IwdService, NetworkStatus};
+use wayle_iwd::{ConnectionState, IwdService};
 use wayle_widgets::{WatcherToken, prelude::*};
 
-use self::messages::{ActiveConnectionsCmd, ConnectionProgress, WifiState};
-pub(crate) use self::messages::{
-    ActiveConnectionsInit, ActiveConnectionsInput, ActiveConnectionsOutput,
-};
+use self::messages::{ActiveConnectionsCmd, ConnectionError, WifiState};
+pub(crate) use self::messages::{ActiveConnectionsInit, ActiveConnectionsInput};
 use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
 
 pub(crate) struct ActiveConnections {
     iwd: Arc<IwdService>,
     wifi: WifiState,
-    connection: ConnectionProgress,
-    has_connections: bool,
+    /// Transient, shell-owned failure display (mirrors the NM dropdown). Shown
+    /// only while `wifi.connection` is `Idle` — see [`Self::has_wifi_error`].
+    error: Option<ConnectionError>,
     wifi_watcher: WatcherToken,
 }
 
@@ -27,7 +26,7 @@ pub(crate) struct ActiveConnections {
 impl Component for ActiveConnections {
     type Init = ActiveConnectionsInit;
     type Input = ActiveConnectionsInput;
-    type Output = ActiveConnectionsOutput;
+    type Output = ();
     type CommandOutput = ActiveConnectionsCmd;
 
     view! {
@@ -35,9 +34,7 @@ impl Component for ActiveConnections {
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
             #[watch]
-            set_visible: model.has_connections
-                || model.is_wifi_connecting()
-                || model.connection.error.is_some(),
+            set_visible: model.card_visible(),
 
             #[name = "section_label"]
             gtk::Label {
@@ -55,9 +52,7 @@ impl Component for ActiveConnections {
                 gtk::Box {
                     add_css_class: "network-connection-card",
                     #[watch]
-                    set_visible: model.wifi.connected
-                        || model.is_wifi_connecting()
-                        || model.connection.error.is_some(),
+                    set_visible: model.card_visible(),
                     #[name = "wifi_icon_container"]
                     gtk::Box {
                         add_css_class: "network-connection-icon",
@@ -95,7 +90,7 @@ impl Component for ActiveConnections {
                             #[watch]
                             set_visible: model.wifi_detail_visible(),
                             #[watch]
-                            set_tooltip_text: model.connection.error.as_deref(),
+                            set_tooltip_text: model.error_tooltip(),
 
                             #[name = "wifi_detail"]
                             gtk::Label {
@@ -128,9 +123,7 @@ impl Component for ActiveConnections {
                                 set_vexpand: false,
                                 set_valign: gtk::Align::Center,
                                 #[watch]
-                                set_visible: model.wifi.connected
-                                    && !model.is_wifi_connecting()
-                                    && model.connection.error.is_none(),
+                                set_visible: model.is_connected(),
                             },
 
                             #[template]
@@ -142,8 +135,7 @@ impl Component for ActiveConnections {
                                 set_vexpand: false,
                                 set_valign: gtk::Align::Center,
                                 #[watch]
-                                set_visible: model.is_wifi_connecting()
-                                    || model.connection.error.is_some(),
+                                set_visible: model.is_connecting() || model.has_wifi_error(),
                             },
                         },
 
@@ -200,7 +192,10 @@ impl Component for ActiveConnections {
                                 label {
                                     set_label: &t!("dropdown-iwd-cancel"),
                                 },
-                                connect_clicked => ActiveConnectionsInput::CancelWifi,
+                                // Cancelling an in-progress connection is just a
+                                // disconnect; the service then reconciles us out
+                                // of the Connecting state.
+                                connect_clicked => ActiveConnectionsInput::DisconnectWifi,
                             },
 
                             #[template]
@@ -218,7 +213,7 @@ impl Component for ActiveConnections {
                         set_visible_child_name:
                             if model.wifi.hovered && model.is_connecting() {
                                 "cancel-actions"
-                            } else if model.wifi.hovered && model.wifi.connected {
+                            } else if model.wifi.hovered && model.is_connected() {
                                 "actions"
                             } else if model.wifi.hovered && model.has_wifi_error() {
                                 "error-actions"
@@ -242,13 +237,11 @@ impl Component for ActiveConnections {
             .get()
             .map(|station| WifiState::from_station(&station))
             .unwrap_or_default();
-        let has_connections = wifi.connected || wifi.connecting;
 
         let mut model = Self {
             iwd: init.iwd.clone(),
             wifi,
-            connection: ConnectionProgress::default(),
-            has_connections,
+            error: None,
             wifi_watcher: WatcherToken::new(),
         };
 
@@ -278,69 +271,20 @@ impl Component for ActiveConnections {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
             ActiveConnectionsInput::DisconnectWifi => self.disconnect_wifi(&sender),
-            ActiveConnectionsInput::CancelWifi => {
-                // Stop the in-progress connection. Clearing the display first
-                // drops the SSID context, so the resulting (aborted) failure is
-                // not surfaced as an error by `SetConnectionError` below.
-                self.connection = ConnectionProgress::default();
-                self.update_has_connections();
-                self.disconnect_wifi(&sender);
-                // Tell the list to leave its Connecting state now, rather than
-                // relying on the aborted connect to report back (which may be
-                // delayed, or never arrive if the disconnect itself fails).
-                let _ = sender.output(ActiveConnectionsOutput::ConnectingStopped);
-            }
-            ActiveConnectionsInput::ForgetWifi => {
-                // `forget_wifi` captures its target synchronously, so call it
-                // before clearing the connecting display — that way a forget
-                // mid-connect still targets the network being connected to.
-                let was_connecting = self.connection.ssid.is_some();
-                self.forget_wifi(&sender);
-                self.connection = ConnectionProgress::default();
-                self.update_has_connections();
-                if was_connecting {
-                    let _ = sender.output(ActiveConnectionsOutput::ConnectingStopped);
-                }
-            }
+            ActiveConnectionsInput::ForgetWifi => self.forget_wifi(&sender),
             ActiveConnectionsInput::DismissError => {
-                self.connection.error = None;
-                self.update_has_connections();
+                self.error = None;
             }
             ActiveConnectionsInput::WifiCardHovered(hovered) => {
                 self.wifi.hovered = hovered;
             }
-            ActiveConnectionsInput::SetConnecting(ssid) => {
-                self.connection.ssid = Some(ssid);
-            }
-            ActiveConnectionsInput::ClearConnecting => {
-                self.connection.ssid = None;
-            }
-            ActiveConnectionsInput::SetConnectionError(error) => {
-                // A failure only applies to a connection attempt that is still
-                // active. When it was stopped via Cancel/Forget (which clear the
-                // SSID), the trailing failure is dropped instead of shown.
-                if self.connection.ssid.is_some() {
-                    // Consult the LIVE backend state (not the cached
-                    // wifi.connected, which lags a watcher hop): if IWD reported
-                    // an error but never left the existing connection — e.g. it
-                    // rejected an empty/invalid passphrase outright — the backend
-                    // didn't move, so resync the card to it instead of showing
-                    // the failed target as the active connection.
-                    let backend_connected = self
-                        .iwd
-                        .station
-                        .get()
-                        .is_some_and(|station| station.connected_ssid.get().is_some());
-                    if backend_connected {
-                        self.connection = ConnectionProgress::default();
-                        self.update_has_connections();
-                    } else {
-                        self.connection.error = Some(error);
-                    }
-                }
-            }
-            ActiveConnectionsInput::ClearConnectionError => {
-                self.connection.error = None;
+            ActiveConnectionsInput::ShowError { ssid, message } => {
+                // The list only routes genuine (non-auth) failures that left us
+                // disconnected, so accept it unconditionally. `has_wifi_error`
+                // gates display on `connection == Idle`, and a later connection
+                // change clears it (see `WifiChanged`), so a stale error can
+                // never resurface.
+                self.error = Some(ConnectionError { ssid, message });
             }
         }
     }
@@ -352,33 +296,29 @@ impl Component for ActiveConnections {
         _root: &Self::Root,
     ) {
         match msg {
-            ActiveConnectionsCmd::WifiStateChanged {
-                connectivity,
-                ssid,
+            ActiveConnectionsCmd::WifiChanged {
+                connection,
                 strength,
                 frequency,
             } => {
-                self.wifi.connected = connectivity == NetworkStatus::Connected;
-                self.wifi.connecting = connectivity == NetworkStatus::Connecting;
-                self.wifi.ssid = ssid;
+                // Any connection activity (connecting elsewhere, or connected)
+                // supersedes a prior failure display.
+                if !matches!(connection, ConnectionState::Idle) {
+                    self.error = None;
+                }
+
+                self.wifi.connection = connection;
                 self.wifi.strength = strength;
                 self.wifi.frequency = frequency;
-
                 self.wifi.icon = helpers::signal_strength_icon(self.wifi.strength.unwrap_or(0));
-
-                if self.wifi.connected {
-                    self.connection = ConnectionProgress::default();
-                }
-                self.update_has_connections();
             }
             ActiveConnectionsCmd::StationDeviceChanged => {
                 if self.iwd.station.get().is_none() {
                     self.wifi = WifiState::default();
-                    self.connection = ConnectionProgress::default();
+                    self.error = None;
                 }
 
                 self.reset_wifi_watchers(&sender);
-                self.update_has_connections();
             }
         }
     }

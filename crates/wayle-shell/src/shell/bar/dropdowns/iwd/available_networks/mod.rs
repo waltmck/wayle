@@ -41,7 +41,6 @@ pub(crate) struct AvailableNetworks {
 pub(super) enum ListState {
     Normal,
     PasswordEntry,
-    Connecting,
 }
 
 #[relm4::component(pub(crate))]
@@ -225,7 +224,7 @@ impl Component for AvailableNetworks {
                 self.handle_wifi_availability(available, &sender);
             }
             AvailableNetworksInput::WifiEnabledChanged(enabled) => {
-                self.handle_wifi_enabled(enabled, &sender);
+                self.handle_wifi_enabled(enabled);
             }
             AvailableNetworksInput::NetworkSelected(index) => {
                 self.select_network(index, &sender);
@@ -235,18 +234,6 @@ impl Component for AvailableNetworks {
             }
             AvailableNetworksInput::PasswordForm(form_output) => {
                 self.handle_password_form(form_output, &sender);
-            }
-            AvailableNetworksInput::AbortConnecting => {
-                // The card cancelled/forgot the in-progress connection. Reset to
-                // normal browsing now so the list stops excluding the target and
-                // a trailing connect result (incl. a spurious auth-fail) can't
-                // re-prompt. Self-contained: does not depend on the aborted
-                // connect reporting back.
-                if self.state == ListState::Connecting {
-                    self.state = ListState::Normal;
-                    self.clear_selection();
-                    self.rebuild_network_list();
-                }
             }
         }
     }
@@ -264,21 +251,17 @@ impl Component for AvailableNetworks {
                 self.dismiss_stale_password_entry();
                 self.rebuild_network_list();
             }
-            AvailableNetworksCmd::ConnectionActivated => {
+            AvailableNetworksCmd::ConnectionActivated
+            | AvailableNetworksCmd::ConnectionCancelled => {
                 self.state = ListState::Normal;
                 self.clear_selection();
                 self.rebuild_network_list();
-
-                let _ = sender.output(AvailableNetworksOutput::Connected);
             }
             AvailableNetworksCmd::ConnectionAuthFailed => {
-                let _ = sender.output(AvailableNetworksOutput::ClearConnecting);
-
                 // Only re-prompt if the attempt is still current. If a backend
-                // event (WiFi toggled off, device removed) or a card-side
-                // Cancel/Forget tore down the selection while the connect was in
-                // flight, don't orphan the list in PasswordEntry with no form —
-                // return to normal browsing instead.
+                // event (WiFi toggled off, device removed) tore down the
+                // selection while the connect was in flight, don't orphan the
+                // list in PasswordEntry with no form — return to normal browsing.
                 if self.selection.is_some() {
                     self.state = ListState::PasswordEntry;
                     self.rebuild_network_list();

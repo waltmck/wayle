@@ -15,7 +15,13 @@ pub(super) fn spawn(
     token: CancellationToken,
 ) {
     let networks = station.networks.clone();
-    watch_cancellable!(sender, token, [networks.watch()], |out| {
-        let _ = out.send(AvailableNetworksCmd::NetworksChanged);
-    });
+    let connection = station.connection.clone();
+    watch_cancellable!(
+        sender,
+        token,
+        [networks.watch(), connection.watch()],
+        |out| {
+            let _ = out.send(AvailableNetworksCmd::NetworksChanged);
+        }
+    );
 }

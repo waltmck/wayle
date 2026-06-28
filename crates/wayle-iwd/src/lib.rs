@@ -38,4 +38,4 @@ pub use error::Error;
 pub use network::Network;
 pub use service::IwdService;
 pub use station::Station;
-pub use types::{NetworkStatus, SecurityType};
+pub use types::{ConnectionState, NetworkStatus, SecurityType};

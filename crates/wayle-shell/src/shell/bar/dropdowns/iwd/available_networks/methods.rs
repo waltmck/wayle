@@ -1,6 +1,6 @@
 use relm4::prelude::*;
 use tracing::warn;
-use wayle_iwd::{Error, SecurityType};
+use wayle_iwd::{ConnectionState, Error, SecurityType};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::{
@@ -30,10 +30,27 @@ impl AvailableNetworks {
         message: String,
         sender: &ComponentSender<Self>,
     ) {
+        // Capture the failed target before clearing the selection.
+        let ssid = self.selection.as_ref().map(|selection| selection.ssid.clone());
+
         self.state = ListState::Normal;
         self.clear_selection();
         self.rebuild_network_list();
-        let _ = sender.output(AvailableNetworksOutput::ConnectionFailed(message));
+
+        // Only surface a card error if the attempt left us disconnected. If IWD
+        // stayed on (or returned to) a connection, the service already
+        // reconciled `connection` to it, so the failure is moot. Read live —
+        // `connect()` sets this synchronously before returning the error.
+        let still_idle = match self.iwd.station.get() {
+            Some(station) => matches!(station.connection.get(), ConnectionState::Idle),
+            None => true,
+        };
+
+        if let Some(ssid) = ssid
+            && still_idle
+        {
+            let _ = sender.output(AvailableNetworksOutput::ConnectionFailed { ssid, message });
+        }
     }
 
     pub(super) fn connect_to_selected(
@@ -50,17 +67,11 @@ impl AvailableNetworks {
         };
 
         let network_path = selection.network_path.clone();
-        let ssid = selection.ssid.clone();
         let secured = selection.secured;
-        self.state = ListState::Connecting;
-        let _ = sender.output(AvailableNetworksOutput::Connecting(ssid));
 
-        // Entering the connecting state changes which SSID is "active" (now the
-        // connecting target) without any change to `station.networks`, so no
-        // list refresh would otherwise fire. Rebuild now so the target leaves
-        // the available list and the previously connected network reappears.
-        self.rebuild_network_list();
-
+        // The service publishes `connection = Connecting{ssid}` as the first step
+        // of `connect()`, which drives the card and the list exclusion — no
+        // optimistic shell state needed here.
         sender.command(move |out, _shutdown| async move {
             // If the user supplied a passphrase (e.g. retrying after an auth
             // failure), clear any saved credentials first. IWD reuses a known
@@ -84,9 +95,14 @@ impl AvailableNetworks {
                 Err(Error::ConnectionFailed) if secured => {
                     // IWD reports a rejected passphrase only as the generic
                     // `Failed` error, so re-prompt for the password. Every other
-                    // error (Aborted, Timeout, NoAgent, NotConfigured, ...) falls
-                    // through to the generic message below and never re-prompts.
+                    // error (Timeout, NoAgent, NotConfigured, ...) falls through
+                    // to the generic message below and never re-prompts.
                     let _ = out.send(AvailableNetworksCmd::ConnectionAuthFailed);
+                }
+                Err(Error::ConnectionAborted) => {
+                    // The user cancelled (or another connect superseded this one):
+                    // not a failure, so reset silently with no error on the card.
+                    let _ = out.send(AvailableNetworksCmd::ConnectionCancelled);
                 }
                 Err(err) => {
                     warn!(error = %err, "iwd connection failed");
@@ -114,10 +130,6 @@ impl AvailableNetworks {
         }
 
         if !available {
-            if self.state == ListState::Connecting {
-                let _ = sender.output(AvailableNetworksOutput::ClearConnecting);
-            }
-
             self.state = ListState::Normal;
             self.clear_selection();
         }
@@ -125,7 +137,7 @@ impl AvailableNetworks {
         self.rebuild_network_list();
     }
 
-    pub(super) fn handle_wifi_enabled(&mut self, enabled: bool, sender: &ComponentSender<Self>) {
+    pub(super) fn handle_wifi_enabled(&mut self, enabled: bool) {
         self.powered = enabled;
 
         if enabled {
@@ -135,31 +147,20 @@ impl AvailableNetworks {
 
         self.ap_cache.clear();
         self.network_list.guard().clear();
-
-        if self.state == ListState::Connecting {
-            let _ = sender.output(AvailableNetworksOutput::ClearConnecting);
-        }
-
         self.state = ListState::Normal;
         self.clear_selection();
     }
 
     /// The SSID currently shown as the Active Connection, and therefore excluded
-    /// from the available list: the network we are connecting to while a
-    /// connection is in progress, otherwise the connected network. This mirrors
-    /// the active-connection card, which favours the in-progress target over the
-    /// network IWD still reports as connected during the transition.
+    /// from the available list: the in-progress connecting target or the
+    /// connected network. Sourced from the service's reconciled `connection`,
+    /// which already favours the in-progress target over the network IWD still
+    /// reports as connected during a transition.
     fn active_ssid(&self) -> Option<String> {
-        if self.state == ListState::Connecting
-            && let Some(selection) = &self.selection
-        {
-            return Some(selection.ssid.clone());
-        }
-
         self.iwd
             .station
             .get()
-            .and_then(|station| station.connected_ssid.get())
+            .and_then(|station| station.connection.get().ssid().map(str::to_string))
     }
 
     pub(super) fn rebuild_network_list(&mut self) {
@@ -217,11 +218,11 @@ impl AvailableNetworks {
                 .any(|network| network.ssid.get() == ssid)
         });
 
-        // Became the active connection via any client. `connected_ssid` is set
-        // for both the connecting and connected states.
+        // Became the active connection via any client.
         let now_active = station
-            .and_then(|station| station.connected_ssid.get())
-            .is_some_and(|connected| connected == ssid);
+            .as_ref()
+            .and_then(|station| station.connection.get().ssid().map(str::to_string))
+            .is_some_and(|active| active == ssid);
 
         if !still_visible || now_active {
             self.state = ListState::Normal;
@@ -270,6 +271,9 @@ impl AvailableNetworks {
     ) {
         match form_output {
             PasswordFormOutput::Connect { password } => {
+                // Close the form but keep the selection so an auth failure can
+                // re-prompt; the service owns the Connecting state from here.
+                self.state = ListState::Normal;
                 self.connect_to_selected(Some(password), sender);
             }
             PasswordFormOutput::Cancel => {

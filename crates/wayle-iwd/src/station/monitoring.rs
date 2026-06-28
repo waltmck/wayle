@@ -20,7 +20,7 @@ use crate::{
         device::DeviceProxy, diagnostic::StationDiagnosticProxy, object_manager::ObjectManagerProxy,
         station::StationProxy,
     },
-    types::{NetworkStatus, dbm_to_percent},
+    types::{ConnectionState, NetworkStatus, dbm_to_percent},
 };
 
 const DIAGNOSTIC_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -34,13 +34,13 @@ impl ModelMonitoring for Station {
         };
         let cancel = cancellation_token.clone();
 
-        let device_proxy = DeviceProxy::new(&self.connection, self.object_path.clone())
+        let device_proxy = DeviceProxy::new(&self.zbus_connection, self.object_path.clone())
             .await
             .map_err(Error::DbusError)?;
-        let station_proxy = StationProxy::new(&self.connection, self.object_path.clone())
+        let station_proxy = StationProxy::new(&self.zbus_connection, self.object_path.clone())
             .await
             .map_err(Error::DbusError)?;
-        let object_manager = ObjectManagerProxy::new(&self.connection)
+        let object_manager = ObjectManagerProxy::new(&self.zbus_connection)
             .await
             .map_err(Error::DbusError)?;
 
@@ -121,6 +121,7 @@ async fn monitor(
                     } else {
                         // Genuine on -> off: clear station state.
                         station.state.set(NetworkStatus::Disconnected);
+                        station.connection.set(ConnectionState::Idle);
                         station.scanning.set(false);
                         station.connected_ssid.set(None);
                         station.strength.set(None);
@@ -134,9 +135,10 @@ async fn monitor(
                 if let Ok(state) = change.get().await {
                     let status = NetworkStatus::from_iwd_state(&state);
                     station.state.set(status);
-                    station
-                        .connected_ssid
-                        .set(resolve_connected_ssid(&station.connection, &station.object_path).await);
+                    let connected_ssid =
+                        resolve_connected_ssid(&station.zbus_connection, &station.object_path).await;
+                    station.connected_ssid.set(connected_ssid.clone());
+                    station.observe_connection(&state, connected_ssid);
 
                     if status == NetworkStatus::Connected {
                         update_diagnostics(&station).await;
@@ -160,9 +162,13 @@ async fn monitor(
             }
 
             Some(_) = connected_changed.next() => {
-                station
-                    .connected_ssid
-                    .set(resolve_connected_ssid(&station.connection, &station.object_path).await);
+                let connected_ssid =
+                    resolve_connected_ssid(&station.zbus_connection, &station.object_path).await;
+                station.connected_ssid.set(connected_ssid.clone());
+                // `ConnectedNetwork` changed but `State` did not, so read it
+                // fresh to classify the new connection correctly.
+                let state = station_proxy.state().await.unwrap_or_default();
+                station.observe_connection(&state, connected_ssid);
                 station.refresh_networks().await;
             }
 
@@ -198,7 +204,7 @@ async fn update_diagnostics(station: &Station) {
         return;
     }
 
-    let Ok(proxy) = StationDiagnosticProxy::new(&station.connection, station.object_path.clone()).await
+    let Ok(proxy) = StationDiagnosticProxy::new(&station.zbus_connection, station.object_path.clone()).await
     else {
         return;
     };

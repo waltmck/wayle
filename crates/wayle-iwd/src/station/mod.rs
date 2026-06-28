@@ -6,7 +6,10 @@
 
 mod monitoring;
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -19,7 +22,7 @@ use crate::{
     error::Error,
     network::Network,
     proxy::{device::DeviceProxy, network::NetworkProxy, station::StationProxy},
-    types::{NetworkStatus, signal_to_percent},
+    types::{ConnectionState, NetworkStatus, signal_to_percent},
 };
 
 #[doc(hidden)]
@@ -48,17 +51,47 @@ fn is_iwd_error(err: &zbus::Error, name: &str) -> bool {
     matches!(err, zbus::Error::MethodError(error_name, _, _) if error_name.as_str() == name)
 }
 
+/// RAII marker that a foreground [`Station::connect`] is in progress. While any
+/// guard is alive the background monitor refrains from writing
+/// [`Station::connection`] (see [`Station::observe_connection`]), so the
+/// foreground attempt fully owns that state and transient IWD signals during a
+/// network switch cannot clobber the in-flight target. The count handles
+/// overlapping attempts (a new connect superseding a pending one).
+struct AttemptGuard(Arc<AtomicUsize>);
+
+impl AttemptGuard {
+    fn new(counter: &Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter.clone())
+    }
+}
+
+impl Drop for AttemptGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// A WiFi station: connection state, scan results, and controls.
 #[derive(Clone)]
 pub struct Station {
-    connection: Connection,
+    zbus_connection: Connection,
     object_path: OwnedObjectPath,
     cancellation_token: Option<CancellationToken>,
     passphrases: Arc<PassphraseStore>,
+    /// Number of foreground [`connect`](Self::connect) attempts in progress.
+    /// While non-zero the monitor leaves [`connection`](Self::connection) to the
+    /// foreground attempt; see [`AttemptGuard`].
+    pending_connects: Arc<AtomicUsize>,
     /// Whether the underlying device is powered on (the WiFi enable toggle).
     pub powered: Property<bool>,
-    /// Current connectivity status.
+    /// Current connectivity status (raw IWD `Station.State`).
     pub state: Property<NetworkStatus>,
+    /// Attempt-aware connection state: the active or in-progress connection and
+    /// its target SSID. This is the single source of truth for the "active
+    /// connection" UI and knows the in-flight target during a transition, which
+    /// [`connected_ssid`](Self::connected_ssid) does not.
+    pub connection: Property<ConnectionState>,
     /// Whether a scan is in progress.
     pub scanning: Property<bool>,
     /// SSID of the connected network, if any.
@@ -117,7 +150,7 @@ impl Station {
     /// # Errors
     /// Returns [`Error::OperationFailed`] if the D-Bus call fails.
     pub async fn set_powered(&self, on: bool) -> Result<(), Error> {
-        let device = DeviceProxy::new(&self.connection, self.object_path.clone())
+        let device = DeviceProxy::new(&self.zbus_connection, self.object_path.clone())
             .await
             .map_err(|e| Error::OperationFailed {
                 operation: "create device proxy",
@@ -161,21 +194,41 @@ impl Station {
     /// `None`. Resolves once IWD reports success, or returns an error (e.g. on
     /// a wrong passphrase).
     ///
+    /// For the duration of the call this attempt owns [`connection`](Self::connection)
+    /// (the monitor steps back — see [`observe_connection`](Self::observe_connection)),
+    /// publishing the target optimistically and reconciling to the true live
+    /// state on completion.
+    ///
     /// # Errors
-    /// Returns [`Error::OperationFailed`] if the connection fails.
+    /// Returns [`Error::ConnectionFailed`] on a rejected passphrase,
+    /// [`Error::ConnectionAborted`] if cancelled/superseded, or
+    /// [`Error::OperationFailed`] for any other failure.
     pub async fn connect(
         &self,
         network_path: OwnedObjectPath,
         passphrase: Option<String>,
     ) -> Result<(), Error> {
+        // Take ownership of `connection` for the lifetime of the attempt so the
+        // monitor's transient signals during a network switch cannot clobber the
+        // in-flight target. Reconciliation to the true state happens below,
+        // before the guard drops.
+        let _attempt = AttemptGuard::new(&self.pending_connects);
+
         if let Some(passphrase) = passphrase {
             self.passphrases.insert(network_path.clone(), passphrase);
         }
 
-        let proxy = match NetworkProxy::new(&self.connection, network_path.clone()).await {
+        // Publish the in-flight target immediately for instant, flicker-free UI.
+        // Resolved from the cached scan list, falling back to the proxy name.
+        if let Some(ssid) = self.network_ssid(&network_path) {
+            self.connection.set(ConnectionState::Connecting { ssid });
+        }
+
+        let proxy = match NetworkProxy::new(&self.zbus_connection, network_path.clone()).await {
             Ok(proxy) => proxy,
             Err(err) => {
                 self.passphrases.discard(&network_path);
+                self.reconcile_connection_from_live().await;
                 return Err(Error::OperationFailed {
                     operation: "create network proxy",
                     source: err.into(),
@@ -183,12 +236,26 @@ impl Station {
             }
         };
 
+        if !matches!(self.connection.get(), ConnectionState::Connecting { .. })
+            && let Ok(name) = proxy.name().await
+        {
+            self.connection.set(ConnectionState::Connecting { ssid: name });
+        }
+
         let result = proxy.connect().await;
         self.passphrases.discard(&network_path);
+
+        // Publish the true state IWD settled on (success, stayed on the previous
+        // network after a rejected passphrase, or disconnected). Reading live
+        // covers every outcome uniformly and is correct even when another connect
+        // is concurrently in flight.
+        self.reconcile_connection_from_live().await;
 
         result.map_err(|e| {
             if is_iwd_error(&e, "net.connman.iwd.Failed") {
                 Error::ConnectionFailed
+            } else if is_iwd_error(&e, "net.connman.iwd.Aborted") {
+                Error::ConnectionAborted
             } else {
                 Error::OperationFailed {
                     operation: "connect to network",
@@ -198,8 +265,52 @@ impl Station {
         })
     }
 
+    /// SSID of a network in the current scan list, by object path.
+    fn network_ssid(&self, network_path: &OwnedObjectPath) -> Option<String> {
+        self.networks
+            .get()
+            .iter()
+            .find(|network| network.object_path() == network_path)
+            .map(|network| network.ssid.get())
+    }
+
+    /// Whether a foreground [`connect`](Self::connect) currently owns
+    /// [`connection`](Self::connection).
+    fn connecting_in_flight(&self) -> bool {
+        self.pending_connects.load(Ordering::SeqCst) > 0
+    }
+
+    /// Publish [`connection`](Self::connection) from an observed raw `Station.State`
+    /// and resolved SSID — the authoritative driver for connections from any
+    /// client (including external ones such as `iwctl`).
+    ///
+    /// A no-op while a foreground [`connect`](Self::connect) is in flight: that
+    /// attempt owns `connection` and the coarse signals seen here during a
+    /// network switch would otherwise clobber its in-flight target.
+    pub(crate) fn observe_connection(&self, state: &str, connected_ssid: Option<String>) {
+        if self.connecting_in_flight() {
+            return;
+        }
+        self.connection
+            .set(ConnectionState::from_raw_state(state, connected_ssid));
+    }
+
+    /// Reconcile [`connection`](Self::connection) to the live `Station.State` and
+    /// `ConnectedNetwork`. Called by [`connect`](Self::connect) on completion to
+    /// publish the true outcome, bypassing the in-flight guard (it *is* the owner
+    /// finishing).
+    async fn reconcile_connection_from_live(&self) {
+        let state = match self.station_proxy().await {
+            Ok(proxy) => proxy.state().await.unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+        let connected_ssid = resolve_connected_ssid(&self.zbus_connection, &self.object_path).await;
+        self.connection
+            .set(ConnectionState::from_raw_state(&state, connected_ssid));
+    }
+
     async fn station_proxy(&self) -> Result<StationProxy<'static>, Error> {
-        StationProxy::new(&self.connection, self.object_path.clone())
+        StationProxy::new(&self.zbus_connection, self.object_path.clone())
             .await
             .map_err(Error::DbusError)
     }
@@ -229,7 +340,7 @@ impl Station {
         let mut networks = Vec::with_capacity(ordered.len());
         for (path, signal) in ordered {
             if let Ok(network) =
-                Network::from_path(&self.connection, path, signal_to_percent(signal)).await
+                Network::from_path(&self.zbus_connection, path, signal_to_percent(signal)).await
             {
                 networks.push(Arc::new(network));
             }
@@ -242,10 +353,13 @@ impl Station {
     /// on (the interface reappears), then refresh the list and kick a scan.
     pub(crate) async fn resync_after_power_on(&self) {
         let (state, scanning, connected_ssid) =
-            read_station_state(&self.connection, &self.object_path).await;
+            read_station_state(&self.zbus_connection, &self.object_path).await;
         self.state.set(state);
         self.scanning.set(scanning);
-        self.connected_ssid.set(connected_ssid);
+        self.connected_ssid.set(connected_ssid.clone());
+        // Just powered on: no foreground attempt can be in flight, so publish
+        // directly from the re-read state.
+        self.connection.set(ConnectionState::from_raw(state, connected_ssid));
         self.refresh_networks().await;
         // Best-effort fresh scan; ignored if the interface isn't ready yet.
         let _ = self.scan().await;
@@ -273,13 +387,17 @@ impl Station {
             (NetworkStatus::Disconnected, false, None)
         };
 
+        let connection_state = ConnectionState::from_raw(state, connected_ssid.clone());
+
         Ok(Self {
-            connection: connection.clone(),
+            zbus_connection: connection.clone(),
             object_path: path,
             cancellation_token,
             passphrases,
+            pending_connects: Arc::new(AtomicUsize::new(0)),
             powered: Property::new(powered),
             state: Property::new(state),
+            connection: Property::new(connection_state),
             scanning: Property::new(scanning),
             connected_ssid: Property::new(connected_ssid),
             strength: Property::new(None),

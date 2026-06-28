@@ -24,23 +24,24 @@ pub(crate) enum AvailableNetworksInput {
     NetworkSelected(usize),
     ForgetNetwork(OwnedObjectPath),
     PasswordForm(PasswordFormOutput),
-    /// The connection was stopped from the active-connection card (Cancel/Forget
-    /// while connecting); leave the Connecting state immediately.
-    AbortConnecting,
 }
 
 #[derive(Debug)]
 pub(crate) enum AvailableNetworksCmd {
+    /// The service connection state or the scan list changed; re-dismiss a stale
+    /// password prompt and rebuild the list.
     NetworksChanged,
     ConnectionActivated,
+    /// The attempt was aborted (cancelled via Disconnect, or superseded). Reset
+    /// the list without surfacing an error.
+    ConnectionCancelled,
     ConnectionAuthFailed,
     ConnectionFailed(String),
 }
 
 #[derive(Debug)]
 pub(crate) enum AvailableNetworksOutput {
-    Connecting(String),
-    ClearConnecting,
-    Connected,
-    ConnectionFailed(String),
+    /// A genuine (non-auth) failure that left the station disconnected; the card
+    /// displays it.
+    ConnectionFailed { ssid: String, message: String },
 }

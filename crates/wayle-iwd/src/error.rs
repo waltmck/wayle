@@ -24,6 +24,12 @@ pub enum Error {
     #[error("connection failed")]
     ConnectionFailed,
 
+    /// The connection attempt was aborted — IWD's `net.connman.iwd.Aborted`,
+    /// returned when an in-progress connect is cancelled by a `Disconnect` (or
+    /// superseded by another connect). A user action, not a failure to surface.
+    #[error("connection aborted")]
+    ConnectionAborted,
+
     /// A network operation failed.
     #[error("cannot {operation}")]
     OperationFailed {

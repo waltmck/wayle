@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use wayle_iwd::{IwdService, NetworkStatus, Station};
+use wayle_iwd::{ConnectionState, IwdService, Station};
 
 use crate::shell::bar::dropdowns::iwd::helpers;
 
@@ -9,9 +9,9 @@ pub(crate) struct ActiveConnectionsInit {
 }
 
 pub(super) struct WifiState {
-    pub connected: bool,
-    pub connecting: bool,
-    pub ssid: Option<String>,
+    /// Service-owned, attempt-aware connection state — the single source of
+    /// truth for what the card shows as the active connection.
+    pub connection: ConnectionState,
     pub strength: Option<u8>,
     pub icon: &'static str,
     pub frequency: Option<u32>,
@@ -20,13 +20,10 @@ pub(super) struct WifiState {
 
 impl WifiState {
     pub(super) fn from_station(station: &Station) -> Self {
-        let connectivity = station.state.get();
         let strength = station.strength.get();
 
         Self {
-            connected: connectivity == NetworkStatus::Connected,
-            connecting: connectivity == NetworkStatus::Connecting,
-            ssid: station.connected_ssid.get(),
+            connection: station.connection.get(),
             strength,
             icon: helpers::signal_strength_icon(strength.unwrap_or(0)),
             frequency: station.frequency.get(),
@@ -38,9 +35,7 @@ impl WifiState {
 impl Default for WifiState {
     fn default() -> Self {
         Self {
-            connected: false,
-            connecting: false,
-            ssid: None,
+            connection: ConnectionState::Idle,
             strength: None,
             icon: helpers::signal_strength_icon(0),
             frequency: None,
@@ -49,39 +44,30 @@ impl Default for WifiState {
     }
 }
 
-#[derive(Default)]
-pub(super) struct ConnectionProgress {
-    pub ssid: Option<String>,
-    pub error: Option<String>,
+/// A failed connection attempt to display on the card. Transient and
+/// shell-owned (mirrors the NetworkManager dropdown's `ConnectionProgress`);
+/// shown only while the station is otherwise idle.
+pub(super) struct ConnectionError {
+    pub ssid: String,
+    pub message: String,
 }
 
 #[derive(Debug)]
 pub(crate) enum ActiveConnectionsInput {
     DisconnectWifi,
-    CancelWifi,
     ForgetWifi,
     DismissError,
     WifiCardHovered(bool),
-    SetConnecting(String),
-    ClearConnecting,
-    SetConnectionError(String),
-    ClearConnectionError,
-}
-
-#[derive(Debug)]
-pub(crate) enum ActiveConnectionsOutput {
-    /// The user stopped an in-progress connection from the card (Cancel/Forget
-    /// while connecting), so the available-networks list should leave its
-    /// Connecting state immediately rather than waiting on the aborted connect.
-    ConnectingStopped,
+    /// Show a failed-connection error on the card, routed from the
+    /// available-networks list (which owns the connect command and its result).
+    ShowError { ssid: String, message: String },
 }
 
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum ActiveConnectionsCmd {
-    WifiStateChanged {
-        connectivity: NetworkStatus,
-        ssid: Option<String>,
+    WifiChanged {
+        connection: ConnectionState,
         strength: Option<u8>,
         frequency: Option<u32>,
     },

@@ -104,7 +104,9 @@ async fn monitor(
             }
 
             _ = poll.tick() => {
-                update_diagnostics(&station).await;
+                if matches!(station.connection.get(), ConnectionState::Connected { .. }) {
+                    update_diagnostics(&station).await;
+                }
             }
 
             Some(change) = powered_changed.next() => {
@@ -193,11 +195,12 @@ async fn monitor(
     }
 }
 
+/// Read diagnostics (RSSI -> strength, frequency) and publish them. Callers must
+/// only invoke this while connected; the `state_changed` "connected" branch reads
+/// immediately so the link's strength/frequency appear at once rather than on the
+/// next poll tick (the optimistic `connection` may still be `Connecting` during a
+/// foreground attempt, so this no longer gates on it).
 async fn update_diagnostics(station: &Station) {
-    if !matches!(station.connection.get(), ConnectionState::Connected { .. }) {
-        return;
-    }
-
     let Ok(proxy) = StationDiagnosticProxy::new(&station.zbus_connection, station.object_path.clone()).await
     else {
         return;

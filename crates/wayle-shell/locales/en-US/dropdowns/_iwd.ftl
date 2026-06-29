@@ -4,6 +4,7 @@ dropdown-iwd-title = WiFi
 dropdown-iwd-active-connection = Active Connection
 dropdown-iwd-available = Available Networks
 dropdown-iwd-connected = Connected
+dropdown-iwd-roaming = Roaming
 dropdown-iwd-connecting = Connecting
 dropdown-iwd-connect = Connect
 dropdown-iwd-disconnect = Disconnect
@@ -25,7 +26,7 @@ dropdown-iwd-disabled-description = Turn WiFi on with the switch above to see av
 dropdown-iwd-security-open = Open
 dropdown-iwd-security-wep = WEP
 dropdown-iwd-security-psk = PSK
-dropdown-iwd-security-enterprise = Enterprise
+dropdown-iwd-security-enterprise = EAP
 dropdown-iwd-security-saved = { $security } · Saved
 
 ## Connection Errors

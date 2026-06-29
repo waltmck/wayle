@@ -1,6 +1,9 @@
 //! IWD Station interface (`net.connman.iwd.Station`).
 
-use zbus::{proxy, zvariant::OwnedObjectPath};
+use zbus::{
+    proxy,
+    zvariant::{ObjectPath, OwnedObjectPath},
+};
 
 #[proxy(
     default_service = "net.connman.iwd",
@@ -10,6 +13,17 @@ pub(crate) trait Station {
     /// Begin a scan for networks. Resolves once the scan request is accepted;
     /// completion is signalled via the `Scanning` property returning to false.
     fn scan(&self) -> zbus::Result<()>;
+
+    /// Register a `SignalLevelAgent` to receive bucketed RSSI level changes for
+    /// the connected network. `levels` are dBm thresholds in descending order.
+    fn register_signal_level_agent(
+        &self,
+        path: &ObjectPath<'_>,
+        levels: &[i16],
+    ) -> zbus::Result<()>;
+
+    /// Unregister a previously registered `SignalLevelAgent`.
+    fn unregister_signal_level_agent(&self, path: &ObjectPath<'_>) -> zbus::Result<()>;
 
     /// Disconnect from the current network and disable auto-connect until the
     /// next explicit connect.

@@ -13,11 +13,13 @@ const HOVER_TRANSITION_MS: u32 = 150;
 
 pub(super) struct NetworkItemInit {
     pub snapshot: NetworkSnapshot,
+    /// Configured signal-strength icon, resolved by the parent.
+    pub icon: String,
 }
 
 pub(super) struct NetworkItem {
     ssid: String,
-    icon: &'static str,
+    icon: String,
     security_label: String,
     object_path: OwnedObjectPath,
 
@@ -55,7 +57,7 @@ impl FactoryComponent for NetworkItem {
             gtk::Image {
                 add_css_class: "network-item-signal",
                 #[watch]
-                set_icon_name: Some(self.icon),
+                set_icon_name: Some(self.icon.as_str()),
                 set_valign: gtk::Align::Center,
             },
 
@@ -134,7 +136,7 @@ impl FactoryComponent for NetworkItem {
     }
 
     fn init_model(init: Self::Init, _index: &Self::Index, _sender: FactorySender<Self>) -> Self {
-        let snapshot = init.snapshot;
+        let NetworkItemInit { snapshot, icon } = init;
         let is_secured = helpers::requires_password(snapshot.security);
         let known = snapshot.known;
         let base_label = methods::translate_security_type(snapshot.security);
@@ -146,7 +148,7 @@ impl FactoryComponent for NetworkItem {
         };
 
         Self {
-            icon: helpers::signal_strength_icon(snapshot.strength),
+            icon,
             is_secured,
             known,
             hovered: false,

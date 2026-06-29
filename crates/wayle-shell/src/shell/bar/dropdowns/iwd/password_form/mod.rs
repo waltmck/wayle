@@ -14,7 +14,7 @@ const ICON_EYE_OFF: &str = "ld-eye-off-symbolic";
 pub(crate) struct PasswordForm {
     ssid: String,
     security_label: String,
-    signal_icon: &'static str,
+    signal_icon: String,
     visible: bool,
     error_message: Option<String>,
     password_entry: gtk::Entry,
@@ -46,7 +46,7 @@ impl SimpleComponent for PasswordForm {
                     #[name = "header_icon"]
                     gtk::Image {
                         #[watch]
-                        set_icon_name: Some(model.signal_icon),
+                        set_icon_name: Some(model.signal_icon.as_str()),
                         set_halign: gtk::Align::Center,
                         set_valign: gtk::Align::Center,
                     },
@@ -143,7 +143,7 @@ impl SimpleComponent for PasswordForm {
         let model = Self {
             ssid: String::new(),
             security_label: String::new(),
-            signal_icon: "network-wireless-signal-excellent-symbolic",
+            signal_icon: String::new(),
             visible: false,
             error_message: None,
             password_entry,
@@ -177,6 +177,9 @@ impl SimpleComponent for PasswordForm {
             PasswordFormInput::CancelClicked => {
                 let _ = sender.output(PasswordFormOutput::Cancel);
                 self.visible = false;
+            }
+            PasswordFormInput::SetSignalIcon(signal_icon) => {
+                self.signal_icon = signal_icon;
             }
         }
     }

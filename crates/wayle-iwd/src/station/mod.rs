@@ -22,7 +22,7 @@ use crate::{
     error::Error,
     network::Network,
     proxy::{device::DeviceProxy, network::NetworkProxy, station::StationProxy},
-    types::{ConnectionState, signal_to_percent},
+    types::{ConnectionState, SignalStrength},
 };
 
 #[doc(hidden)]
@@ -92,8 +92,10 @@ pub struct Station {
     pub connection: Property<ConnectionState>,
     /// Whether a scan is in progress.
     pub scanning: Property<bool>,
-    /// Signal strength of the connected link (0-100), from diagnostics.
-    pub strength: Property<Option<u8>>,
+    /// Bucketed signal strength of the connected link. Pushed by IWD's
+    /// `SignalLevelAgent` as the RSSI crosses thresholds, plus a snapshot read
+    /// when a connection comes up.
+    pub strength: Property<Option<SignalStrength>>,
     /// Frequency of the connected link in MHz, from diagnostics.
     pub frequency: Property<Option<u32>>,
     /// Visible networks, ordered strongest-first.
@@ -139,6 +141,15 @@ impl Station {
     /// D-Bus object path of the station device.
     pub(crate) fn object_path(&self) -> &OwnedObjectPath {
         &self.object_path
+    }
+
+    /// Cancel this station's background monitor. Called when the station is being
+    /// replaced (e.g. IWD restarted, or the device was removed) so the old
+    /// monitor task exits promptly instead of lingering with dead signal streams.
+    pub(crate) fn shutdown(&self) {
+        if let Some(token) = &self.cancellation_token {
+            token.cancel();
+        }
     }
 
     /// Enable or disable the WiFi device (`Device.Powered`).
@@ -335,9 +346,9 @@ impl Station {
 
         let mut networks = Vec::with_capacity(ordered.len());
         for (path, signal) in ordered {
-            if let Ok(network) =
-                Network::from_path(&self.zbus_connection, path, signal_to_percent(signal)).await
-            {
+            // `GetOrderedNetworks` reports 100 * dBm; bucket the plain-dBm value.
+            let strength = SignalStrength::from_dbm(signal / 100);
+            if let Ok(network) = Network::from_path(&self.zbus_connection, path, strength).await {
                 networks.push(Arc::new(network));
             }
         }
@@ -355,6 +366,18 @@ impl Station {
         // directly from the re-read state.
         self.connection
             .set(ConnectionState::from_raw_state(&state, connected_ssid));
+
+        // The Station interface — and any signal-level agent registration — was
+        // dropped while powered off, so re-register to keep strength event-driven.
+        if let Ok(station_proxy) = self.station_proxy().await {
+            monitoring::setup_signal_level_agent(
+                &self.zbus_connection,
+                &station_proxy,
+                self.strength.clone(),
+            )
+            .await;
+        }
+
         self.refresh_networks().await;
         // Best-effort fresh scan; ignored if the interface isn't ready yet.
         let _ = self.scan().await;

@@ -30,20 +30,24 @@ pub enum ConnectionState {
         /// SSID currently connected to.
         ssid: String,
     },
+    /// Connected to `ssid` but roaming between access points. Treated as an
+    /// active connection (signal strength stays meaningful); the UI may label it
+    /// distinctly from [`Connected`](Self::Connected).
+    Roaming {
+        /// SSID currently connected to.
+        ssid: String,
+    },
 }
 
 impl ConnectionState {
     /// Derives a connection state from IWD's raw `Station.State` string
     /// (`connected` / `connecting` / `disconnecting` / `disconnected` /
-    /// `roaming`) and the resolved `ConnectedNetwork` SSID. `roaming` is treated
-    /// as `Connected` (you remain associated to the same SSID while roaming
-    /// between APs); only the terminal `disconnected`/`disconnecting` clear to
-    /// `Idle`.
+    /// `roaming`) and the resolved `ConnectedNetwork` SSID. Only the terminal
+    /// `disconnected`/`disconnecting` clear to `Idle`.
     pub(crate) fn from_raw_state(state: &str, connected_ssid: Option<String>) -> Self {
         match state {
-            "connected" | "roaming" => {
-                connected_ssid.map_or(Self::Idle, |ssid| Self::Connected { ssid })
-            }
+            "connected" => connected_ssid.map_or(Self::Idle, |ssid| Self::Connected { ssid }),
+            "roaming" => connected_ssid.map_or(Self::Idle, |ssid| Self::Roaming { ssid }),
             "connecting" => connected_ssid.map_or(Self::Idle, |ssid| Self::Connecting { ssid }),
             _ => Self::Idle,
         }
@@ -53,7 +57,9 @@ impl ConnectionState {
     pub fn ssid(&self) -> Option<&str> {
         match self {
             Self::Idle => None,
-            Self::Connecting { ssid } | Self::Connected { ssid } => Some(ssid),
+            Self::Connecting { ssid } | Self::Connected { ssid } | Self::Roaming { ssid } => {
+                Some(ssid)
+            }
         }
     }
 }
@@ -90,30 +96,68 @@ impl SecurityType {
     }
 }
 
-/// Converts an IWD signal strength from `Station.GetOrderedNetworks` (reported as
-/// `100 * dBm`, e.g. `-6000` for -60 dBm, like iwgtk) to a 0-100 strength bucket.
-pub(crate) fn signal_to_percent(signal_100dbm: i16) -> u8 {
-    dbm_to_percent(i32::from(signal_100dbm) / 100)
+/// dBm thresholds (descending) partitioning RSSI into the five
+/// [`SignalStrength`] buckets, matching iwgtk's levels. These are registered with
+/// IWD's `SignalLevelAgent` so it pushes a level change whenever the connected
+/// link's RSSI crosses one — the same thresholds therefore both define the
+/// buckets and drive event-based strength updates.
+pub(crate) const SIGNAL_STRENGTH_THRESHOLDS: [i16; 4] = [-60, -67, -74, -81];
+
+/// Signal strength as a discrete bucket (weakest to strongest), partitioned by
+/// [`SIGNAL_STRENGTH_THRESHOLDS`]. Exposed instead of a raw percentage because
+/// IWD's `SignalLevelAgent` reports a bucketed level, and the UI only renders
+/// per-bucket icons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum SignalStrength {
+    /// No usable signal.
+    #[default]
+    None,
+    /// Weak signal.
+    Weak,
+    /// Acceptable signal.
+    Ok,
+    /// Good signal.
+    Good,
+    /// Excellent signal.
+    Excellent,
 }
 
-/// Maps a dBm signal level to a 0-100 strength bucket using the same thresholds
-/// as iwgtk (`{-60, -67, -74, -81}` dBm). The returned values sit in the middle
-/// of the five signal-icon buckets so the rendered icon matches iwgtk's levels
-/// (excellent / good / ok / weak / none).
-///
-/// Also used for the connected link's `RSSI` from
-/// `StationDiagnostic.GetDiagnostics` (already plain dBm).
-pub(crate) fn dbm_to_percent(dbm: i32) -> u8 {
-    if dbm > -60 {
-        100
-    } else if dbm > -67 {
-        75
-    } else if dbm > -74 {
-        55
-    } else if dbm > -81 {
-        35
-    } else {
-        10
+impl SignalStrength {
+    /// Number of buckets (one more than the threshold count).
+    pub const COUNT: usize = SIGNAL_STRENGTH_THRESHOLDS.len() + 1;
+
+    /// Bucket index, `0` (weakest) to `COUNT - 1` (strongest).
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Buckets a plain-dBm RSSI value (e.g. from `GetDiagnostics`, or a
+    /// `GetOrderedNetworks` value already divided by 100).
+    pub(crate) fn from_dbm(dbm: i16) -> Self {
+        let index = SIGNAL_STRENGTH_THRESHOLDS
+            .iter()
+            .filter(|&&threshold| dbm >= threshold)
+            .count();
+        Self::from_index(index)
+    }
+
+    /// Maps a `SignalLevelAgent` level (`0` = strongest, `N` = weakest) to a
+    /// bucket. IWD's ordering is the reverse of our weakest-first index.
+    pub(crate) fn from_level(level: u8) -> Self {
+        let index = SIGNAL_STRENGTH_THRESHOLDS
+            .len()
+            .saturating_sub(usize::from(level));
+        Self::from_index(index)
+    }
+
+    fn from_index(index: usize) -> Self {
+        match index {
+            0 => Self::None,
+            1 => Self::Weak,
+            2 => Self::Ok,
+            3 => Self::Good,
+            _ => Self::Excellent,
+        }
     }
 }
 
@@ -128,10 +172,10 @@ mod tests {
             ConnectionState::from_raw_state("connected", net()),
             ConnectionState::Connected { ssid: "net".into() }
         );
-        // Roaming stays Connected, not Connecting.
+        // Roaming is its own state, still carrying the SSID.
         assert_eq!(
             ConnectionState::from_raw_state("roaming", net()),
-            ConnectionState::Connected { ssid: "net".into() }
+            ConnectionState::Roaming { ssid: "net".into() }
         );
         assert_eq!(
             ConnectionState::from_raw_state("connecting", net()),
@@ -153,21 +197,31 @@ mod tests {
     }
 
     #[test]
-    fn signal_conversion_100dbm_scale() {
-        assert_eq!(signal_to_percent(-5000), 100); // -50 dBm -> excellent
-        assert_eq!(signal_to_percent(-6500), 75); // -65 dBm -> good
-        assert_eq!(signal_to_percent(-7000), 55); // -70 dBm -> ok
-        assert_eq!(signal_to_percent(-8000), 35); // -80 dBm -> weak
-        assert_eq!(signal_to_percent(-9000), 10); // -90 dBm -> none
+    fn signal_strength_from_dbm() {
+        assert_eq!(SignalStrength::from_dbm(-55), SignalStrength::Excellent);
+        assert_eq!(SignalStrength::from_dbm(-60), SignalStrength::Excellent); // boundary: >= -60
+        assert_eq!(SignalStrength::from_dbm(-65), SignalStrength::Good);
+        assert_eq!(SignalStrength::from_dbm(-70), SignalStrength::Ok);
+        assert_eq!(SignalStrength::from_dbm(-78), SignalStrength::Weak);
+        assert_eq!(SignalStrength::from_dbm(-85), SignalStrength::None);
     }
 
     #[test]
-    fn dbm_thresholds_match_iwgtk() {
-        assert_eq!(dbm_to_percent(-55), 100); // excellent
-        assert_eq!(dbm_to_percent(-60), 75); // boundary: not > -60 -> good
-        assert_eq!(dbm_to_percent(-65), 75); // good
-        assert_eq!(dbm_to_percent(-70), 55); // ok
-        assert_eq!(dbm_to_percent(-78), 35); // weak
-        assert_eq!(dbm_to_percent(-85), 10); // none
+    fn signal_strength_from_agent_level() {
+        // IWD level 0 = strongest .. 4 = weakest, the reverse of our index.
+        assert_eq!(SignalStrength::from_level(0), SignalStrength::Excellent);
+        assert_eq!(SignalStrength::from_level(1), SignalStrength::Good);
+        assert_eq!(SignalStrength::from_level(2), SignalStrength::Ok);
+        assert_eq!(SignalStrength::from_level(3), SignalStrength::Weak);
+        assert_eq!(SignalStrength::from_level(4), SignalStrength::None);
+        assert_eq!(SignalStrength::from_level(99), SignalStrength::None); // clamps
+    }
+
+    #[test]
+    fn signal_strength_index_round_trips_levels() {
+        // from_dbm and from_level agree on the same RSSI bucket.
+        assert_eq!(SignalStrength::Excellent.index(), SignalStrength::COUNT - 1);
+        assert_eq!(SignalStrength::None.index(), 0);
+        assert_eq!(SignalStrength::from_dbm(-65), SignalStrength::from_level(1));
     }
 }

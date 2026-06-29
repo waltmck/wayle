@@ -1,13 +1,9 @@
 use relm4::ComponentSender;
 use tracing::warn;
-use wayle_iwd::ConnectionState;
+use wayle_iwd::{ConnectionState, SignalStrength};
 
 use super::ActiveConnections;
 use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
-
-/// Icon shown while a connection is being established — the same "acquiring"
-/// icon the bar module displays during a connection.
-const CONNECTING_ICON: &str = "network-wireless-acquiring-symbolic";
 
 impl ActiveConnections {
     /// Whether a failed attempt should be shown. Suppressed once the station is
@@ -25,9 +21,29 @@ impl ActiveConnections {
         matches!(self.wifi.connection, ConnectionState::Connected { .. })
     }
 
+    pub(super) fn is_roaming(&self) -> bool {
+        matches!(self.wifi.connection, ConnectionState::Roaming { .. })
+    }
+
+    /// Whether there is an active connection (connected or roaming) — both show
+    /// the signal-strength icon and the "actions" controls.
+    pub(super) fn is_active(&self) -> bool {
+        self.is_connected() || self.is_roaming()
+    }
+
+    /// Label shown for an active connection: "Roaming" while roaming, otherwise
+    /// "Connected".
+    pub(super) fn active_status_label(&self) -> String {
+        if self.is_roaming() {
+            t!("dropdown-iwd-roaming")
+        } else {
+            t!("dropdown-iwd-connected")
+        }
+    }
+
     /// Whether the active-connection card should be shown at all.
     pub(super) fn card_visible(&self) -> bool {
-        self.is_connecting() || self.is_connected() || self.has_wifi_error()
+        self.is_connecting() || self.is_active() || self.has_wifi_error()
     }
 
     pub(super) fn reset_wifi_watchers(&mut self, sender: &ComponentSender<Self>) {
@@ -65,8 +81,8 @@ impl ActiveConnections {
     pub(super) fn wifi_detail_visible(&self) -> bool {
         // While connecting, `wifi.frequency` may still hold the *previous*
         // network's band until fresh diagnostics arrive, so only show the band
-        // once actually connected.
-        self.has_wifi_error() || (self.is_connected() && self.wifi.frequency.is_some())
+        // once on an active connection (connected or roaming).
+        self.has_wifi_error() || (self.is_active() && self.wifi.frequency.is_some())
     }
 
     pub(super) fn wifi_detail(&self) -> String {
@@ -113,16 +129,22 @@ impl ActiveConnections {
         classes
     }
 
-    pub(super) fn effective_wifi_icon(&self) -> &'static str {
+    pub(super) fn effective_wifi_icon(&self) -> String {
+        let iwd = &self.config.config().modules.iwd;
+
         if self.has_wifi_error() {
-            return "network-wireless-offline-symbolic";
+            return iwd.wifi_offline_icon.get();
         }
 
         if self.is_connecting() {
-            return CONNECTING_ICON;
+            return iwd.wifi_acquiring_icon.get();
         }
 
-        helpers::signal_strength_icon(self.wifi.strength.unwrap_or(0))
+        helpers::signal_strength_icon(
+            self.wifi.strength.unwrap_or(SignalStrength::None),
+            &iwd.wifi_signal_icons.get(),
+            &iwd.wifi_connected_icon.get(),
+        )
     }
 
     pub(super) fn disconnect_wifi(&self, sender: &ComponentSender<Self>) {

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use relm4::ComponentSender;
 use tokio_util::sync::CancellationToken;
+use wayle_config::ConfigService;
 use wayle_iwd::IwdService;
 use wayle_widgets::{watch, watch_cancellable};
 
@@ -44,4 +45,29 @@ pub(super) fn spawn_device_watchers(
     watch!(sender, [station.watch()], |out| {
         let _ = out.send(ActiveConnectionsCmd::StationDeviceChanged);
     });
+}
+
+/// Re-render the card when any configured connection icon changes at runtime.
+pub(super) fn spawn_config_watchers(
+    sender: &ComponentSender<ActiveConnections>,
+    config: &Arc<ConfigService>,
+) {
+    let icons = &config.config().modules.iwd;
+    let offline = icons.wifi_offline_icon.clone();
+    let acquiring = icons.wifi_acquiring_icon.clone();
+    let connected = icons.wifi_connected_icon.clone();
+    let signal = icons.wifi_signal_icons.clone();
+
+    watch!(
+        sender,
+        [
+            offline.watch(),
+            acquiring.watch(),
+            connected.watch(),
+            signal.watch()
+        ],
+        |out| {
+            let _ = out.send(ActiveConnectionsCmd::ConfigChanged);
+        }
+    );
 }

@@ -1,6 +1,6 @@
 use relm4::prelude::*;
 use tracing::warn;
-use wayle_iwd::{ConnectionState, Error, SecurityType};
+use wayle_iwd::{ConnectionState, Error, SecurityType, SignalStrength};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::{
@@ -160,6 +160,16 @@ impl AvailableNetworks {
             .and_then(|station| station.connection.get().ssid().map(str::to_string))
     }
 
+    /// Resolve the configured signal-strength icon for a bucket.
+    pub(super) fn signal_icon(&self, strength: SignalStrength) -> String {
+        let iwd = &self.config.config().modules.iwd;
+        helpers::signal_strength_icon(
+            strength,
+            &iwd.wifi_signal_icons.get(),
+            &iwd.wifi_connected_icon.get(),
+        )
+    }
+
     pub(super) fn rebuild_network_list(&mut self) {
         let active_ssid = self.active_ssid();
         let mut snapshots = match self.iwd.station.get() {
@@ -179,12 +189,20 @@ impl AvailableNetworks {
 
         self.ap_cache = snapshots;
 
+        // Resolve the configured signal icons once for this rebuild.
+        let (signal_icons, connected_icon) = {
+            let iwd = &self.config.config().modules.iwd;
+            (iwd.wifi_signal_icons.get(), iwd.wifi_connected_icon.get())
+        };
+
         let mut guard = self.network_list.guard();
         guard.clear();
 
         for snapshot in &self.ap_cache {
+            let icon = helpers::signal_strength_icon(snapshot.strength, &signal_icons, &connected_icon);
             guard.push_back(NetworkItemInit {
                 snapshot: snapshot.clone(),
+                icon,
             });
         }
     }
@@ -233,14 +251,16 @@ impl AvailableNetworks {
         };
 
         let security_label = translate_security_type(network.security);
-        let signal_icon = helpers::signal_strength_icon(network.strength);
+        let strength = network.strength;
+        let signal_icon = self.signal_icon(strength);
         let secured = helpers::requires_password(network.security);
 
         self.selection = Some(SelectedNetwork {
             network_path: network.object_path.clone(),
             ssid: network.ssid.clone(),
             security_label: security_label.clone(),
-            signal_icon,
+            strength,
+            signal_icon: signal_icon.clone(),
             secured,
         });
 

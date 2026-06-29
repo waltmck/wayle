@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-use wayle_iwd::Station;
-use wayle_widgets::watch_cancellable;
 use relm4::ComponentSender;
+use tokio_util::sync::CancellationToken;
+use wayle_config::ConfigService;
+use wayle_iwd::Station;
+use wayle_widgets::{watch, watch_cancellable};
 
 use crate::shell::bar::dropdowns::iwd::available_networks::{
     AvailableNetworks, messages::AvailableNetworksCmd,
@@ -24,4 +25,18 @@ pub(super) fn spawn(
             let _ = out.send(AvailableNetworksCmd::NetworksChanged);
         }
     );
+}
+
+/// Rebuild the list when the configured signal icons change at runtime.
+pub(super) fn spawn_config_watchers(
+    sender: &ComponentSender<AvailableNetworks>,
+    config: &Arc<ConfigService>,
+) {
+    let icons = &config.config().modules.iwd;
+    let signal = icons.wifi_signal_icons.clone();
+    let connected = icons.wifi_connected_icon.clone();
+
+    watch!(sender, [signal.watch(), connected.watch()], |out| {
+        let _ = out.send(AvailableNetworksCmd::ConfigChanged);
+    });
 }

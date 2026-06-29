@@ -33,12 +33,13 @@ pub struct IwdConfig {
     #[default(String::from("network-wireless-connected-symbolic"))]
     pub wifi_connected_icon: ConfigProperty<String>,
 
-    /// WiFi signal strength icons from weak to excellent.
+    /// WiFi signal strength icons from weakest to strongest.
     ///
-    /// The signal percentage maps to icons: 0-25% uses icons\[0\], 26-50% uses
-    /// icons\[1\], etc.
+    /// The signal-strength bucket is scaled across the list: `icons[0]` is used
+    /// for the weakest signal and the last entry for the strongest.
     #[serde(rename = "wifi-signal-icons")]
     #[default(vec![
+        String::from("network-wireless-signal-none-symbolic"),
         String::from("network-wireless-signal-weak-symbolic"),
         String::from("network-wireless-signal-ok-symbolic"),
         String::from("network-wireless-signal-good-symbolic"),

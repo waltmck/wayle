@@ -131,12 +131,14 @@ impl Component for IwdDropdown {
         let active_connections = ActiveConnections::builder()
             .launch(ActiveConnectionsInit {
                 iwd: init.iwd.clone(),
+                config: init.config.clone(),
             })
             .detach();
 
         let available_networks = AvailableNetworks::builder()
             .launch(AvailableNetworksInit {
                 iwd: init.iwd.clone(),
+                config: init.config.clone(),
             })
             .forward(sender.input_sender(), IwdDropdownMsg::AvailableNetworks);
 

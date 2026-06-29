@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use gtk::prelude::*;
 use relm4::{factory::FactoryVecDeque, gtk, prelude::*};
+use wayle_config::ConfigService;
 use wayle_iwd::IwdService;
 use wayle_widgets::{WatcherToken, prelude::*};
 
@@ -27,6 +28,7 @@ use crate::{
 
 pub(crate) struct AvailableNetworks {
     iwd: Arc<IwdService>,
+    config: Arc<ConfigService>,
     wifi_available: bool,
     powered: bool,
     network_list: FactoryVecDeque<NetworkItem>,
@@ -193,6 +195,7 @@ impl Component for AvailableNetworks {
 
         let mut model = Self {
             iwd: init.iwd.clone(),
+            config: init.config.clone(),
             wifi_available,
             powered,
             network_list,
@@ -207,6 +210,8 @@ impl Component for AvailableNetworks {
             let token = model.ap_watcher.reset();
             watchers::spawn(&sender, &station, token);
         }
+
+        watchers::spawn_config_watchers(&sender, &init.config);
 
         model.rebuild_network_list();
 
@@ -272,13 +277,28 @@ impl Component for AvailableNetworks {
                     self.password_form.emit(PasswordFormInput::Show {
                         ssid: selection.ssid.clone(),
                         security_label: selection.security_label.clone(),
-                        signal_icon: selection.signal_icon,
+                        signal_icon: selection.signal_icon.clone(),
                         error_message: Some(t!("dropdown-iwd-error-wrong-password")),
                     });
                 }
             }
             AvailableNetworksCmd::ConnectionFailed(reason) => {
                 self.handle_connection_failure(reason, &sender);
+            }
+            AvailableNetworksCmd::ConfigChanged => {
+                // Rebuild the list so each item re-reads the configured icons, and
+                // refresh the open password form's icon (without resetting entry).
+                self.rebuild_network_list();
+
+                if self.state == ListState::PasswordEntry
+                    && let Some(strength) = self.selection.as_ref().map(|selection| selection.strength)
+                {
+                    let icon = self.signal_icon(strength);
+                    if let Some(selection) = &mut self.selection {
+                        selection.signal_icon = icon.clone();
+                    }
+                    self.password_form.emit(PasswordFormInput::SetSignalIcon(icon));
+                }
             }
         }
     }

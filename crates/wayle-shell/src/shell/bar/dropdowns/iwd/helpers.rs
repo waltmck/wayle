@@ -1,28 +1,31 @@
 use std::{collections::HashSet, sync::Arc};
 
-use wayle_iwd::{Network, SecurityType};
+use wayle_iwd::{Network, SecurityType, SignalStrength};
 use zbus::zvariant::OwnedObjectPath;
 
 /// Snapshot of an IWD network for display in the network list.
 #[derive(Debug, Clone)]
 pub(crate) struct NetworkSnapshot {
     pub ssid: String,
-    pub strength: u8,
+    pub strength: SignalStrength,
     pub security: SecurityType,
     pub object_path: OwnedObjectPath,
     pub known: bool,
 }
 
-pub(crate) fn signal_strength_icon(strength: u8) -> &'static str {
-    // Standard freedesktop/Adwaita icons (as iwgtk uses). Unlike wayle's bundled
-    // `cm-wireless-signal-*` icons, these render with proper per-level distinction.
-    match strength {
-        0..=19 => "network-wireless-signal-none-symbolic",
-        20..=39 => "network-wireless-signal-weak-symbolic",
-        40..=59 => "network-wireless-signal-ok-symbolic",
-        60..=79 => "network-wireless-signal-good-symbolic",
-        _ => "network-wireless-signal-excellent-symbolic",
+/// Picks the configured signal-strength icon for a bucket, scaling the bucket
+/// onto the configured icon list (`config.wifi_signal_icons`); `fallback` is the
+/// configured "connected, strength unknown" icon used when the list is empty.
+pub(crate) fn signal_strength_icon(
+    strength: SignalStrength,
+    icons: &[String],
+    fallback: &str,
+) -> String {
+    if icons.is_empty() {
+        return fallback.to_string();
     }
+    let idx = (strength.index() * icons.len() / SignalStrength::COUNT).min(icons.len() - 1);
+    icons.get(idx).cloned().unwrap_or_else(|| fallback.to_string())
 }
 
 pub(crate) fn frequency_to_band(freq_mhz: u32) -> Option<&'static str> {
@@ -39,9 +42,9 @@ pub(crate) fn requires_password(security: SecurityType) -> bool {
     !matches!(security, SecurityType::None | SecurityType::Enterprise)
 }
 
-/// Deduplicates networks by SSID and filters out hidden networks, enterprise
-/// networks, and the active SSID (the network shown in the active-connection
-/// card — either the connected network or the in-progress connecting target).
+/// Deduplicates networks by SSID and filters out hidden networks and the active
+/// SSID (the network shown in the active-connection card — either the connected
+/// network or the in-progress connecting target).
 ///
 /// The input is expected to already be ordered strongest-first (as
 /// `Station.GetOrderedNetworks` returns it), and that order is preserved — like
@@ -61,9 +64,6 @@ pub(crate) fn unique_networks(
         }
 
         let security = network.security.get();
-        if security == SecurityType::Enterprise {
-            continue;
-        }
 
         if active_ssid.is_some_and(|active| active == ssid) {
             continue;
@@ -92,14 +92,24 @@ mod tests {
 
     #[test]
     fn signal_icon_buckets() {
-        assert_eq!(signal_strength_icon(0), "network-wireless-signal-none-symbolic");
-        assert_eq!(signal_strength_icon(30), "network-wireless-signal-weak-symbolic");
-        assert_eq!(signal_strength_icon(50), "network-wireless-signal-ok-symbolic");
-        assert_eq!(signal_strength_icon(70), "network-wireless-signal-good-symbolic");
+        // Default config: 4 icons (weak/ok/good/excellent), no "none" — so None
+        // and Weak both map to the weakest icon.
+        let icons = vec![
+            String::from("weak"),
+            String::from("ok"),
+            String::from("good"),
+            String::from("excellent"),
+        ];
+        assert_eq!(signal_strength_icon(SignalStrength::None, &icons, "connected"), "weak");
+        assert_eq!(signal_strength_icon(SignalStrength::Weak, &icons, "connected"), "weak");
+        assert_eq!(signal_strength_icon(SignalStrength::Ok, &icons, "connected"), "ok");
+        assert_eq!(signal_strength_icon(SignalStrength::Good, &icons, "connected"), "good");
         assert_eq!(
-            signal_strength_icon(90),
-            "network-wireless-signal-excellent-symbolic"
+            signal_strength_icon(SignalStrength::Excellent, &icons, "connected"),
+            "excellent"
         );
+        // Empty list falls back to the configured connected icon.
+        assert_eq!(signal_strength_icon(SignalStrength::Good, &[], "connected"), "connected");
     }
 
     #[test]

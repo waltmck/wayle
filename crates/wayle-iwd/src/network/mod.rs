@@ -12,7 +12,7 @@ use crate::{
     error::Error,
     proxy::{known_network::KnownNetworkProxy, network::NetworkProxy},
     station::is_real_path,
-    types::SecurityType,
+    types::{SecurityType, SignalStrength},
 };
 
 /// A network visible to a station.
@@ -22,8 +22,8 @@ pub struct Network {
     object_path: OwnedObjectPath,
     /// Network name (SSID).
     pub ssid: Property<String>,
-    /// Signal strength as a 0-100 percentage.
-    pub strength: Property<u8>,
+    /// Signal strength as a discrete [`SignalStrength`] bucket.
+    pub strength: Property<SignalStrength>,
     /// Security classification derived from `Network.Type`.
     pub security: Property<SecurityType>,
     /// Whether credentials for this network are already saved.
@@ -36,12 +36,12 @@ impl Network {
         &self.object_path
     }
 
-    /// Build a snapshot from a network object path and its signal strength
-    /// (already converted to a 0-100 percentage).
+    /// Build a snapshot from a network object path and its bucketed signal
+    /// strength.
     pub(crate) async fn from_path(
         connection: &Connection,
         path: OwnedObjectPath,
-        strength_percent: u8,
+        strength: SignalStrength,
     ) -> Result<Self, Error> {
         let proxy = NetworkProxy::new(connection, path.clone())
             .await
@@ -63,7 +63,7 @@ impl Network {
             connection: connection.clone(),
             object_path: path,
             ssid: Property::new(ssid),
-            strength: Property::new(strength_percent),
+            strength: Property::new(strength),
             security: Property::new(security),
             known: Property::new(known),
         })

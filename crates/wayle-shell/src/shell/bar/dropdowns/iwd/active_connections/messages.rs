@@ -1,16 +1,18 @@
 use std::sync::Arc;
 
-use wayle_iwd::{ConnectionState, IwdService, Station};
+use wayle_config::ConfigService;
+use wayle_iwd::{ConnectionState, IwdService, SignalStrength, Station};
 
 pub(crate) struct ActiveConnectionsInit {
     pub iwd: Arc<IwdService>,
+    pub config: Arc<ConfigService>,
 }
 
 pub(super) struct WifiState {
     /// Service-owned, attempt-aware connection state — the single source of
     /// truth for what the card shows as the active connection.
     pub connection: ConnectionState,
-    pub strength: Option<u8>,
+    pub strength: Option<SignalStrength>,
     pub frequency: Option<u32>,
     pub hovered: bool,
 }
@@ -61,8 +63,10 @@ pub(crate) enum ActiveConnectionsInput {
 pub(crate) enum ActiveConnectionsCmd {
     WifiChanged {
         connection: ConnectionState,
-        strength: Option<u8>,
+        strength: Option<SignalStrength>,
         frequency: Option<u32>,
     },
     StationDeviceChanged,
+    /// A configured icon changed; re-render so `effective_wifi_icon` re-reads it.
+    ConfigChanged,
 }

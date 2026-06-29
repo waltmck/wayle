@@ -4,6 +4,7 @@ dropdown-iwd-title = Wi-Fi
 dropdown-iwd-active-connection = Connexion active
 dropdown-iwd-available = Réseaux disponibles
 dropdown-iwd-connected = Connecté
+dropdown-iwd-roaming = Itinérance
 dropdown-iwd-connecting = Connexion
 dropdown-iwd-connect = Connecter
 dropdown-iwd-disconnect = Déconnecter
@@ -25,7 +26,7 @@ dropdown-iwd-disabled-description = Activez le Wi-Fi avec l'interrupteur ci-dess
 dropdown-iwd-security-open = Ouvert
 dropdown-iwd-security-wep = WEP
 dropdown-iwd-security-psk = PSK
-dropdown-iwd-security-enterprise = Entreprise
+dropdown-iwd-security-enterprise = EAP
 dropdown-iwd-security-saved = { $security } · Enregistré
 
 ## Erreurs de connexion

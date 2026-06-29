@@ -1,16 +1,16 @@
 //! Background property monitoring for a [`Station`].
 
-use std::{
-    sync::{Arc, Weak},
-    time::Duration,
-};
+use std::sync::{Arc, Weak};
 
 use futures::StreamExt;
-use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+use wayle_core::Property;
 use wayle_traits::ModelMonitoring;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::{
+    Connection,
+    zvariant::{ObjectPath, OwnedObjectPath},
+};
 
 use super::{Station, resolve_connected_ssid};
 use crate::{
@@ -20,10 +20,9 @@ use crate::{
         device::DeviceProxy, diagnostic::StationDiagnosticProxy, object_manager::ObjectManagerProxy,
         station::StationProxy,
     },
-    types::{ConnectionState, dbm_to_percent},
+    signal_agent::{SIGNAL_LEVEL_AGENT_PATH, SignalLevelAgent},
+    types::{ConnectionState, SIGNAL_STRENGTH_THRESHOLDS, SignalStrength},
 };
-
-const DIAGNOSTIC_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 impl ModelMonitoring for Station {
     type Error = Error;
@@ -43,6 +42,11 @@ impl ModelMonitoring for Station {
         let object_manager = ObjectManagerProxy::new(&self.zbus_connection)
             .await
             .map_err(Error::DbusError)?;
+
+        // Register a SignalLevelAgent so IWD pushes bucketed strength changes for
+        // the connected link. Best-effort: if it fails, strength is still read
+        // when a connection comes up, just not updated continuously.
+        setup_signal_level_agent(&self.zbus_connection, &station_proxy, self.strength.clone()).await;
 
         // Populate the initial scan list (IWD returns its last cached results).
         self.refresh_networks().await;
@@ -90,8 +94,6 @@ async fn monitor(
             return;
         }
     };
-    let mut poll = interval(DIAGNOSTIC_POLL_INTERVAL);
-
     loop {
         let Some(station) = weak_station.upgrade() else {
             return;
@@ -101,12 +103,6 @@ async fn monitor(
             _ = cancellation_token.cancelled() => {
                 debug!("station monitor cancelled");
                 return;
-            }
-
-            _ = poll.tick() => {
-                if matches!(station.connection.get(), ConnectionState::Connected { .. }) {
-                    update_diagnostics(&station).await;
-                }
             }
 
             Some(change) = powered_changed.next() => {
@@ -137,7 +133,9 @@ async fn monitor(
                         resolve_connected_ssid(&station.zbus_connection, &station.object_path).await;
                     station.observe_connection(&state, connected_ssid);
 
-                    if state == "connected" {
+                    // Roaming is still an active link, so keep its diagnostics
+                    // (strength/frequency) current rather than clearing them.
+                    if state == "connected" || state == "roaming" {
                         update_diagnostics(&station).await;
                     } else {
                         station.strength.set(None);
@@ -195,11 +193,10 @@ async fn monitor(
     }
 }
 
-/// Read diagnostics (RSSI -> strength, frequency) and publish them. Callers must
-/// only invoke this while connected; the `state_changed` "connected" branch reads
-/// immediately so the link's strength/frequency appear at once rather than on the
-/// next poll tick (the optimistic `connection` may still be `Connecting` during a
-/// foreground attempt, so this no longer gates on it).
+/// Read diagnostics (RSSI -> strength, frequency) and publish them. Called from
+/// the `state_changed` "connected" branch so frequency (which the
+/// `SignalLevelAgent` does not report) and an initial strength appear as soon as
+/// the link comes up; ongoing strength then arrives via the agent.
 async fn update_diagnostics(station: &Station) {
     let Ok(proxy) = StationDiagnosticProxy::new(&station.zbus_connection, station.object_path.clone()).await
     else {
@@ -212,10 +209,48 @@ async fn update_diagnostics(station: &Station) {
     };
 
     if let Some(rssi) = diagnostics.get("RSSI").and_then(|v| i16::try_from(v).ok()) {
-        station.strength.set(Some(dbm_to_percent(i32::from(rssi))));
+        station.strength.set(Some(SignalStrength::from_dbm(rssi)));
     }
 
     if let Some(frequency) = diagnostics.get("Frequency").and_then(|v| u32::try_from(v).ok()) {
         station.frequency.set(Some(frequency));
+    }
+}
+
+/// Serve and register a [`SignalLevelAgent`] so IWD pushes the connected link's
+/// bucketed strength. Best-effort: any failure is logged and strength then
+/// updates only via the connect-time snapshot. `remove`-before-`at` keeps
+/// registration idempotent across a device re-plug (a stale object from a
+/// previous station is cleared first).
+pub(super) async fn setup_signal_level_agent(
+    connection: &Connection,
+    station_proxy: &StationProxy<'static>,
+    strength: Property<Option<SignalStrength>>,
+) {
+    let Ok(path) = ObjectPath::try_from(SIGNAL_LEVEL_AGENT_PATH) else {
+        return;
+    };
+
+    let server = connection.object_server();
+    let _ = server
+        .remove::<SignalLevelAgent, _>(SIGNAL_LEVEL_AGENT_PATH)
+        .await;
+
+    if let Err(err) = server
+        .at(SIGNAL_LEVEL_AGENT_PATH, SignalLevelAgent::new(strength))
+        .await
+    {
+        debug!(error = %err, "cannot serve iwd signal-level agent; strength updates on connect only");
+        return;
+    }
+
+    if let Err(err) = station_proxy
+        .register_signal_level_agent(&path, &SIGNAL_STRENGTH_THRESHOLDS)
+        .await
+    {
+        debug!(error = %err, "cannot register iwd signal-level agent; strength updates on connect only");
+        let _ = server
+            .remove::<SignalLevelAgent, _>(SIGNAL_LEVEL_AGENT_PATH)
+            .await;
     }
 }

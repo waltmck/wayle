@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
+use wayle_config::ConfigService;
 use wayle_iwd::{ConnectionState, IwdService};
 use wayle_widgets::{WatcherToken, prelude::*};
 
@@ -15,6 +16,7 @@ use crate::i18n::t;
 
 pub(crate) struct ActiveConnections {
     iwd: Arc<IwdService>,
+    config: Arc<ConfigService>,
     wifi: WifiState,
     /// Transient, shell-owned failure display (mirrors the NM dropdown). Shown
     /// only while `wifi.connection` is `Idle` — see [`Self::has_wifi_error`].
@@ -63,7 +65,7 @@ impl Component for ActiveConnections {
                         #[name = "wifi_icon"]
                         gtk::Image {
                             #[watch]
-                            set_icon_name: Some(model.effective_wifi_icon()),
+                            set_icon_name: Some(model.effective_wifi_icon().as_str()),
                             set_halign: gtk::Align::Center,
                             set_valign: gtk::Align::Center,
                         },
@@ -119,11 +121,12 @@ impl Component for ActiveConnections {
 
                             gtk::Label {
                                 add_css_class: "network-connection-status",
-                                set_label: &t!("dropdown-iwd-connected"),
+                                #[watch]
+                                set_label: &model.active_status_label(),
                                 set_vexpand: false,
                                 set_valign: gtk::Align::Center,
                                 #[watch]
-                                set_visible: model.is_connected(),
+                                set_visible: model.is_active(),
                             },
 
                             #[template]
@@ -213,7 +216,7 @@ impl Component for ActiveConnections {
                         set_visible_child_name:
                             if model.wifi.hovered && model.is_connecting() {
                                 "cancel-actions"
-                            } else if model.wifi.hovered && model.is_connected() {
+                            } else if model.wifi.hovered && model.is_active() {
                                 "actions"
                             } else if model.wifi.hovered && model.has_wifi_error() {
                                 "error-actions"
@@ -240,12 +243,14 @@ impl Component for ActiveConnections {
 
         let mut model = Self {
             iwd: init.iwd.clone(),
+            config: init.config.clone(),
             wifi,
             error: None,
             wifi_watcher: WatcherToken::new(),
         };
 
         watchers::spawn_device_watchers(&sender, &init.iwd);
+        watchers::spawn_config_watchers(&sender, &init.config);
 
         model.reset_wifi_watchers(&sender);
 
@@ -319,6 +324,9 @@ impl Component for ActiveConnections {
 
                 self.reset_wifi_watchers(&sender);
             }
+            // No state to update — returning re-evaluates the `#[watch]` bindings,
+            // so `effective_wifi_icon` re-reads the configured icons.
+            ActiveConnectionsCmd::ConfigChanged => {}
         }
     }
 }

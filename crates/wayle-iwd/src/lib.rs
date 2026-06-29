@@ -15,7 +15,7 @@
 //! if let Some(station) = iwd.station.get() {
 //!     println!("powered: {}", station.powered.get());
 //!     for network in station.networks.get().iter() {
-//!         println!("  {} ({}%)", network.ssid.get(), network.strength.get());
+//!         println!("  {} ({:?})", network.ssid.get(), network.strength.get());
 //!     }
 //! }
 //! # Ok(())
@@ -29,6 +29,7 @@ mod monitoring;
 mod network;
 mod proxy;
 mod service;
+mod signal_agent;
 /// WiFi station model and connection controls.
 pub mod station;
 mod types;
@@ -37,4 +38,4 @@ pub use error::Error;
 pub use network::Network;
 pub use service::IwdService;
 pub use station::Station;
-pub use types::{ConnectionState, SecurityType};
+pub use types::{ConnectionState, SecurityType, SignalStrength};

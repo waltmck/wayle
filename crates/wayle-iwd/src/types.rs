@@ -131,6 +131,20 @@ impl SignalStrength {
         self as usize
     }
 
+    /// Maps this bucket onto a list of `num_icons` weakest-first icons, scaling
+    /// when the list size differs from [`COUNT`](Self::COUNT). Returns `None` for
+    /// an empty list. With the common 4-icon list (no "none" entry) both
+    /// [`None`](Self::None) and [`Weak`](Self::Weak) map to the weakest icon.
+    ///
+    /// This is the single definition of the bucket→icon-slot mapping shared by
+    /// every UI surface (bar icon, dropdown card, network list).
+    pub fn icon_index(self, num_icons: usize) -> Option<usize> {
+        if num_icons == 0 {
+            return None;
+        }
+        Some((self.index() * num_icons / Self::COUNT).min(num_icons - 1))
+    }
+
     /// Buckets a plain-dBm RSSI value (e.g. from `GetDiagnostics`, or a
     /// `GetOrderedNetworks` value already divided by 100).
     pub(crate) fn from_dbm(dbm: i16) -> Self {
@@ -215,6 +229,21 @@ mod tests {
         assert_eq!(SignalStrength::from_level(3), SignalStrength::Weak);
         assert_eq!(SignalStrength::from_level(4), SignalStrength::None);
         assert_eq!(SignalStrength::from_level(99), SignalStrength::None); // clamps
+    }
+
+    #[test]
+    fn signal_strength_icon_index() {
+        // 4-icon list (no "none"): None and Weak collapse to the weakest slot.
+        assert_eq!(SignalStrength::None.icon_index(4), Some(0));
+        assert_eq!(SignalStrength::Weak.icon_index(4), Some(0));
+        assert_eq!(SignalStrength::Ok.icon_index(4), Some(1));
+        assert_eq!(SignalStrength::Good.icon_index(4), Some(2));
+        assert_eq!(SignalStrength::Excellent.icon_index(4), Some(3));
+        // 5-icon list maps one bucket per icon.
+        assert_eq!(SignalStrength::None.icon_index(5), Some(0));
+        assert_eq!(SignalStrength::Excellent.icon_index(5), Some(4));
+        // Empty list has no slot.
+        assert_eq!(SignalStrength::Ok.icon_index(0), None);
     }
 
     #[test]

@@ -187,24 +187,74 @@ impl AvailableNetworks {
             snapshots.retain(|network| network.ssid != selection.ssid);
         }
 
-        self.ap_cache = snapshots;
-
         // Resolve the configured signal icons once for this rebuild.
         let (signal_icons, connected_icon) = {
             let iwd = &self.config.config().modules.iwd;
             (iwd.wifi_signal_icons.get(), iwd.wifi_connected_icon.get())
         };
+        let icon_for = |snapshot: &helpers::NetworkSnapshot| {
+            helpers::signal_strength_icon(snapshot.strength, &signal_icons, &connected_icon)
+        };
 
+        // Reconcile the factory in place rather than clearing and rebuilding it.
+        // A wholesale destroy/recreate of every row while the dropdown popover is
+        // open disturbs the popover and closes it; reusing rows also preserves
+        // scroll position. Only genuinely added/removed/moved rows change.
         let mut guard = self.network_list.guard();
-        guard.clear();
 
-        for snapshot in &self.ap_cache {
-            let icon = helpers::signal_strength_icon(snapshot.strength, &signal_icons, &connected_icon);
-            guard.push_back(NetworkItemInit {
-                snapshot: snapshot.clone(),
-                icon,
-            });
+        // 1. Drop rows whose SSID is gone (reverse, to keep indices stable).
+        let mut idx = guard.len();
+        while idx > 0 {
+            idx -= 1;
+            let gone = guard
+                .get(idx)
+                .is_some_and(|item| !snapshots.iter().any(|s| s.ssid == item.ssid()));
+            if gone {
+                guard.remove(idx);
+            }
         }
+
+        // 2. Walk the target order, reusing rows where possible.
+        for (i, snapshot) in snapshots.iter().enumerate() {
+            let at_i = guard
+                .get(i)
+                .map(|item| (item.ssid() == snapshot.ssid, item.reusable_for(snapshot)));
+            match at_i {
+                // Same network already here: update in place.
+                Some((true, true)) => {
+                    if let Some(item) = guard.get_mut(i) {
+                        item.refresh(snapshot, icon_for(snapshot));
+                    }
+                }
+                // Same SSID but needs a fresh widget (e.g. it became known).
+                Some((true, false)) => {
+                    guard.remove(i);
+                    guard.insert(i, NetworkItemInit { snapshot: snapshot.clone(), icon: icon_for(snapshot) });
+                }
+                // Wrong row here: pull the matching one up if it exists further
+                // down, otherwise insert a new row at this position.
+                Some((false, _)) => {
+                    if let Some(j) =
+                        (i + 1..guard.len()).find(|&j| guard.get(j).is_some_and(|item| item.ssid() == snapshot.ssid))
+                    {
+                        guard.remove(j);
+                    }
+                    guard.insert(i, NetworkItemInit { snapshot: snapshot.clone(), icon: icon_for(snapshot) });
+                }
+                // Past the end: append.
+                None => {
+                    guard.push_back(NetworkItemInit { snapshot: snapshot.clone(), icon: icon_for(snapshot) });
+                }
+            }
+        }
+
+        // 3. Drop any trailing rows (safety net; step 1 + 2 normally leave none).
+        while guard.len() > snapshots.len() {
+            guard.remove(guard.len() - 1);
+        }
+
+        drop(guard);
+        self.ap_cache = snapshots;
     }
 
     /// Dismiss the password prompt when it is no longer relevant: the target
@@ -260,7 +310,6 @@ impl AvailableNetworks {
             ssid: network.ssid.clone(),
             security_label: security_label.clone(),
             strength,
-            signal_icon: signal_icon.clone(),
             secured,
         });
 

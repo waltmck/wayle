@@ -12,6 +12,11 @@ use crate::{
 /// the device is powered on — so device presence is keyed on this interface.
 pub(crate) const DEVICE_INTERFACE: &str = "net.connman.iwd.Device";
 
+/// D-Bus interface carrying station (connection/scan) state. Present only while
+/// the device is powered on; it is added/removed as the device is toggled, which
+/// is how station state subscriptions are (re)established (mirroring iwgtk).
+pub(crate) const STATION_INTERFACE: &str = "net.connman.iwd.Station";
+
 /// D-Bus interface implemented by visible networks.
 pub(crate) const NETWORK_INTERFACE: &str = "net.connman.iwd.Network";
 

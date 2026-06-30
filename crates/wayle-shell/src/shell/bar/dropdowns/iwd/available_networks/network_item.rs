@@ -28,6 +28,40 @@ pub(super) struct NetworkItem {
     hovered: bool,
 }
 
+impl NetworkItem {
+    /// SSID, the stable identity used to reconcile the list in place.
+    pub(super) fn ssid(&self) -> &str {
+        &self.ssid
+    }
+
+    /// Whether this row can be updated in place for `snapshot`, or must be
+    /// recreated. `known` is the only field wired up at construction time (it
+    /// gates the hover-to-forget controller in `init_widgets`), so a change there
+    /// requires a fresh row; everything else updates via [`Self::refresh`].
+    pub(super) fn reusable_for(&self, snapshot: &NetworkSnapshot) -> bool {
+        self.known == snapshot.known
+    }
+
+    /// Update the mutable display fields in place (icon and security label),
+    /// avoiding a destroy/recreate of the row widget.
+    pub(super) fn refresh(&mut self, snapshot: &NetworkSnapshot, icon: String) {
+        self.icon = icon;
+        self.is_secured = helpers::requires_password(snapshot.security);
+        self.security_label = security_label(snapshot);
+        self.object_path = snapshot.object_path.clone();
+    }
+}
+
+/// Security label for a network, marking saved secured networks distinctly.
+fn security_label(snapshot: &NetworkSnapshot) -> String {
+    let base = methods::translate_security_type(snapshot.security);
+    if snapshot.known && helpers::requires_password(snapshot.security) {
+        t!("dropdown-iwd-security-saved", security = base)
+    } else {
+        base
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum NetworkItemInput {
     Hovered(bool),
@@ -137,22 +171,12 @@ impl FactoryComponent for NetworkItem {
 
     fn init_model(init: Self::Init, _index: &Self::Index, _sender: FactorySender<Self>) -> Self {
         let NetworkItemInit { snapshot, icon } = init;
-        let is_secured = helpers::requires_password(snapshot.security);
-        let known = snapshot.known;
-        let base_label = methods::translate_security_type(snapshot.security);
-
-        let security_label = if known && is_secured {
-            t!("dropdown-iwd-security-saved", security = base_label)
-        } else {
-            base_label
-        };
-
         Self {
             icon,
-            is_secured,
-            known,
+            is_secured: helpers::requires_password(snapshot.security),
+            known: snapshot.known,
             hovered: false,
-            security_label,
+            security_label: security_label(&snapshot),
             ssid: snapshot.ssid,
             object_path: snapshot.object_path,
         }

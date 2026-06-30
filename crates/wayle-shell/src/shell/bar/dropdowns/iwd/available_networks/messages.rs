@@ -10,9 +10,10 @@ pub(super) struct SelectedNetwork {
     pub network_path: OwnedObjectPath,
     pub ssid: String,
     pub security_label: String,
-    /// Signal bucket, kept so the icon can be recomputed when icon config changes.
+    /// Signal bucket — the source of truth for the password-form icon, which is
+    /// recomputed from it (rather than cached) whenever it is needed, so an icon
+    /// config change has a single place to take effect.
     pub strength: SignalStrength,
-    pub signal_icon: String,
     pub secured: bool,
 }
 

@@ -277,7 +277,7 @@ impl Component for AvailableNetworks {
                     self.password_form.emit(PasswordFormInput::Show {
                         ssid: selection.ssid.clone(),
                         security_label: selection.security_label.clone(),
-                        signal_icon: selection.signal_icon.clone(),
+                        signal_icon: self.signal_icon(selection.strength),
                         error_message: Some(t!("dropdown-iwd-error-wrong-password")),
                     });
                 }
@@ -293,11 +293,8 @@ impl Component for AvailableNetworks {
                 if self.state == ListState::PasswordEntry
                     && let Some(strength) = self.selection.as_ref().map(|selection| selection.strength)
                 {
-                    let icon = self.signal_icon(strength);
-                    if let Some(selection) = &mut self.selection {
-                        selection.signal_icon = icon.clone();
-                    }
-                    self.password_form.emit(PasswordFormInput::SetSignalIcon(icon));
+                    self.password_form
+                        .emit(PasswordFormInput::SetSignalIcon(self.signal_icon(strength)));
                 }
             }
         }

@@ -3,6 +3,8 @@ use std::{collections::HashSet, sync::Arc};
 use wayle_iwd::{Network, SecurityType, SignalStrength};
 use zbus::zvariant::OwnedObjectPath;
 
+pub(crate) use crate::shell::bar::dropdowns::frequency_to_band;
+
 /// Snapshot of an IWD network for display in the network list.
 #[derive(Debug, Clone)]
 pub(crate) struct NetworkSnapshot {
@@ -21,21 +23,11 @@ pub(crate) fn signal_strength_icon(
     icons: &[String],
     fallback: &str,
 ) -> String {
-    if icons.is_empty() {
-        return fallback.to_string();
-    }
-    let idx = (strength.index() * icons.len() / SignalStrength::COUNT).min(icons.len() - 1);
-    icons.get(idx).cloned().unwrap_or_else(|| fallback.to_string())
-}
-
-pub(crate) fn frequency_to_band(freq_mhz: u32) -> Option<&'static str> {
-    match freq_mhz {
-        2400..=2500 => Some("2.4 GHz"),
-        5000..=5900 => Some("5 GHz"),
-        5901..=7125 => Some("6 GHz"),
-        57000..=71000 => Some("60 GHz"),
-        _ => None,
-    }
+    strength
+        .icon_index(icons.len())
+        .and_then(|idx| icons.get(idx))
+        .cloned()
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 pub(crate) fn requires_password(security: SecurityType) -> bool {
@@ -118,13 +110,5 @@ mod tests {
         assert!(!requires_password(SecurityType::Enterprise));
         assert!(requires_password(SecurityType::Psk));
         assert!(requires_password(SecurityType::Wep));
-    }
-
-    #[test]
-    fn frequency_bands() {
-        assert_eq!(frequency_to_band(2412), Some("2.4 GHz"));
-        assert_eq!(frequency_to_band(5180), Some("5 GHz"));
-        assert_eq!(frequency_to_band(5955), Some("6 GHz"));
-        assert_eq!(frequency_to_band(900), None);
     }
 }

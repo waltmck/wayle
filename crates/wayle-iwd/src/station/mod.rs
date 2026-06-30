@@ -21,7 +21,9 @@ use crate::{
     agent::PassphraseStore,
     error::Error,
     network::Network,
-    proxy::{device::DeviceProxy, network::NetworkProxy, station::StationProxy},
+    proxy::{
+        adapter::AdapterProxy, device::DeviceProxy, network::NetworkProxy, station::StationProxy,
+    },
     types::{ConnectionState, SignalStrength},
 };
 
@@ -154,6 +156,11 @@ impl Station {
 
     /// Enable or disable the WiFi device (`Device.Powered`).
     ///
+    /// A device cannot be powered on while its parent adapter is powered off, so
+    /// when enabling we first power the adapter on (a no-op if it already is).
+    /// This makes the toggle recover an adapter that was switched off (e.g. via
+    /// `iwctl adapter ... set-property Powered off`) rather than failing.
+    ///
     /// # Errors
     /// Returns [`Error::OperationFailed`] if the D-Bus call fails.
     pub async fn set_powered(&self, on: bool) -> Result<(), Error> {
@@ -164,8 +171,37 @@ impl Station {
                 source: e.into(),
             })?;
 
+        if on {
+            self.power_on_adapter(&device).await?;
+        }
+
         device.set_powered(on).await.map_err(|e| Error::OperationFailed {
             operation: "set device powered",
+            source: e.into(),
+        })
+    }
+
+    /// Ensure this device's parent adapter is powered on. A no-op if the adapter
+    /// is already on (or its path/state cannot be read — in which case the
+    /// subsequent device power-on surfaces any real error).
+    async fn power_on_adapter(&self, device: &DeviceProxy<'_>) -> Result<(), Error> {
+        let Ok(adapter_path) = device.adapter().await else {
+            return Ok(());
+        };
+
+        let adapter = AdapterProxy::new(&self.zbus_connection, adapter_path)
+            .await
+            .map_err(|e| Error::OperationFailed {
+                operation: "create adapter proxy",
+                source: e.into(),
+            })?;
+
+        if adapter.powered().await.unwrap_or(true) {
+            return Ok(());
+        }
+
+        adapter.set_powered(true).await.map_err(|e| Error::OperationFailed {
+            operation: "set adapter powered",
             source: e.into(),
         })
     }
@@ -184,14 +220,23 @@ impl Station {
 
     /// Disconnect from the current network.
     ///
+    /// Cancelling an in-flight [`connect`](Self::connect) is just a disconnect, so
+    /// on success this publishes [`Idle`](ConnectionState::Idle) immediately rather
+    /// than waiting for the pending `connect` to reconcile — the UI never lingers
+    /// on "Connecting" for a connection the user already cancelled.
+    ///
     /// # Errors
     /// Returns [`Error::OperationFailed`] if the D-Bus call fails.
     pub async fn disconnect(&self) -> Result<(), Error> {
         let station = self.station_proxy().await?;
-        station.disconnect().await.map_err(|e| Error::OperationFailed {
+        let result = station.disconnect().await.map_err(|e| Error::OperationFailed {
             operation: "disconnect",
             source: e.into(),
-        })
+        });
+        if result.is_ok() {
+            self.connection.set(ConnectionState::Idle);
+        }
+        result
     }
 
     /// Connect to a network by object path.
@@ -225,12 +270,6 @@ impl Station {
             self.passphrases.insert(network_path.clone(), passphrase);
         }
 
-        // Publish the in-flight target immediately for instant, flicker-free UI.
-        // Resolved from the cached scan list, falling back to the proxy name.
-        if let Some(ssid) = self.network_ssid(&network_path) {
-            self.connection.set(ConnectionState::Connecting { ssid });
-        }
-
         let proxy = match NetworkProxy::new(&self.zbus_connection, network_path.clone()).await {
             Ok(proxy) => proxy,
             Err(err) => {
@@ -243,20 +282,37 @@ impl Station {
             }
         };
 
-        if !matches!(self.connection.get(), ConnectionState::Connecting { .. })
-            && let Ok(name) = proxy.name().await
-        {
-            self.connection.set(ConnectionState::Connecting { ssid: name });
+        // Resolve the target SSID (cached scan list first, else the proxy name)
+        // and publish the in-flight target immediately for instant, flicker-free
+        // UI. Set unconditionally so the most recent attempt's target always wins.
+        let target_ssid = match self.network_ssid(&network_path) {
+            Some(ssid) => Some(ssid),
+            None => proxy.name().await.ok(),
+        };
+        if let Some(ssid) = target_ssid.clone() {
+            self.connection.set(ConnectionState::Connecting { ssid });
         }
 
         let result = proxy.connect().await;
         self.passphrases.discard(&network_path);
 
-        // Publish the true state IWD settled on (success, stayed on the previous
-        // network after a rejected passphrase, or disconnected). Reading live
-        // covers every outcome uniformly and is correct even when another connect
-        // is concurrently in flight.
-        self.reconcile_connection_from_live().await;
+        // Publish the terminal state — but only when no *other* attempt is still
+        // in flight, so a superseded attempt finishing first cannot clobber a
+        // newer attempt's in-flight target (the newer attempt owns `connection`
+        // and will publish its own outcome).
+        if !self.other_attempt_in_flight() {
+            match (&result, target_ssid) {
+                // Success: we are connected to the target — publish it directly,
+                // no live read required.
+                (Ok(()), Some(ssid)) => {
+                    self.connection.set(ConnectionState::Connected { ssid });
+                }
+                // Otherwise reconcile to whatever IWD actually settled on: success
+                // with an unknown target, a rejected passphrase that left us on the
+                // previous network, or a plain failure.
+                _ => self.reconcile_connection_from_live().await,
+            }
+        }
 
         result.map_err(|e| {
             if is_iwd_error(&e, "net.connman.iwd.Failed") {
@@ -287,6 +343,13 @@ impl Station {
         self.pending_connects.load(Ordering::SeqCst) > 0
     }
 
+    /// Whether a foreground [`connect`](Self::connect) *other than the caller's*
+    /// is in flight. The caller holds its own [`AttemptGuard`], so a count above
+    /// one means a newer attempt is running and owns [`connection`](Self::connection).
+    fn other_attempt_in_flight(&self) -> bool {
+        self.pending_connects.load(Ordering::SeqCst) > 1
+    }
+
     /// Publish [`connection`](Self::connection) from an observed raw `Station.State`
     /// and resolved SSID — the authoritative driver for connections from any
     /// client (including external ones such as `iwctl`).
@@ -305,15 +368,32 @@ impl Station {
     /// Reconcile [`connection`](Self::connection) to the live `Station.State` and
     /// `ConnectedNetwork`. Called by [`connect`](Self::connect) on completion to
     /// publish the true outcome, bypassing the in-flight guard (it *is* the owner
-    /// finishing).
+    /// finishing). Falls back to [`Idle`](ConnectionState::Idle) if the live state
+    /// cannot be read — a just-failed attempt with an unreadable interface is
+    /// treated as disconnected.
     async fn reconcile_connection_from_live(&self) {
-        let state = match self.station_proxy().await {
-            Ok(proxy) => proxy.state().await.unwrap_or_default(),
-            Err(_) => String::new(),
+        let connection = match self.read_station_snapshot().await {
+            Some((state, connected_ssid)) => {
+                ConnectionState::from_raw_state(&state, connected_ssid)
+            }
+            None => ConnectionState::Idle,
         };
-        let connected_ssid = resolve_connected_ssid(&self.zbus_connection, &self.object_path).await;
-        self.connection
-            .set(ConnectionState::from_raw_state(&state, connected_ssid));
+        self.connection.set(connection);
+    }
+
+    /// Read a coherent snapshot of the live `Station.State` and connected SSID
+    /// from a single proxy.
+    ///
+    /// Returns `None` only if the `Station` interface is transiently unavailable
+    /// (e.g. across suspend/resume, or while IWD is restarting) so the background
+    /// monitor can preserve the last known state instead of flickering a live
+    /// connection to disconnected. Reading both off one proxy back-to-back keeps
+    /// the `(state, ssid)` pair coherent.
+    pub(crate) async fn read_station_snapshot(&self) -> Option<(String, Option<String>)> {
+        let proxy = self.station_proxy().await.ok()?;
+        let state = proxy.state().await.ok()?;
+        let connected_ssid = resolve_connected_ssid(&self.zbus_connection, &proxy).await;
+        Some((state, connected_ssid))
     }
 
     async fn station_proxy(&self) -> Result<StationProxy<'static>, Error> {
@@ -347,40 +427,15 @@ impl Station {
         let mut networks = Vec::with_capacity(ordered.len());
         for (path, signal) in ordered {
             // `GetOrderedNetworks` reports 100 * dBm; bucket the plain-dBm value.
-            let strength = SignalStrength::from_dbm(signal / 100);
+            // Floor (not truncate-toward-zero) so a fractional negative RSSI like
+            // -74.5 dBm buckets as the weaker -75, not the stronger -74.
+            let strength = SignalStrength::from_dbm(signal.div_euclid(100));
             if let Ok(network) = Network::from_path(&self.zbus_connection, path, strength).await {
                 networks.push(Arc::new(network));
             }
         }
 
         self.networks.replace(networks);
-    }
-
-    /// Re-read the `Station`-interface state after the device is powered back
-    /// on (the interface reappears), then refresh the list and kick a scan.
-    pub(crate) async fn resync_after_power_on(&self) {
-        let (state, scanning, connected_ssid) =
-            read_station_state(&self.zbus_connection, &self.object_path).await;
-        self.scanning.set(scanning);
-        // Just powered on: no foreground attempt can be in flight, so publish
-        // directly from the re-read state.
-        self.connection
-            .set(ConnectionState::from_raw_state(&state, connected_ssid));
-
-        // The Station interface — and any signal-level agent registration — was
-        // dropped while powered off, so re-register to keep strength event-driven.
-        if let Ok(station_proxy) = self.station_proxy().await {
-            monitoring::setup_signal_level_agent(
-                &self.zbus_connection,
-                &station_proxy,
-                self.strength.clone(),
-            )
-            .await;
-        }
-
-        self.refresh_networks().await;
-        // Best-effort fresh scan; ignored if the interface isn't ready yet.
-        let _ = self.scan().await;
     }
 
     async fn from_path(
@@ -435,18 +490,19 @@ async fn read_station_state(
 
     let state = station_proxy.state().await.unwrap_or_default();
     let scanning = station_proxy.scanning().await.unwrap_or(false);
-    let connected_ssid = resolve_connected_ssid(connection, path).await;
+    let connected_ssid = resolve_connected_ssid(connection, &station_proxy).await;
 
     (state, scanning, connected_ssid)
 }
 
-/// Resolve the SSID of the station's connected network, if any.
-pub(crate) async fn resolve_connected_ssid(
+/// Resolve the SSID of the station's connected network, if any, reusing an
+/// existing [`StationProxy`] so the read stays coherent with the caller's other
+/// reads off the same proxy.
+async fn resolve_connected_ssid(
     connection: &Connection,
-    station_path: &OwnedObjectPath,
+    station_proxy: &StationProxy<'_>,
 ) -> Option<String> {
-    let station = StationProxy::new(connection, station_path.clone()).await.ok()?;
-    let path = station.connected_network().await.ok()?;
+    let path = station_proxy.connected_network().await.ok()?;
     if !is_real_path(&path) {
         return None;
     }

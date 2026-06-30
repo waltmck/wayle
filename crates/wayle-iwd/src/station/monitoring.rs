@@ -12,9 +12,9 @@ use zbus::{
     zvariant::{ObjectPath, OwnedObjectPath},
 };
 
-use super::{Station, resolve_connected_ssid};
+use super::Station;
 use crate::{
-    discovery::NETWORK_INTERFACE,
+    discovery::{NETWORK_INTERFACE, STATION_INTERFACE},
     error::Error,
     proxy::{
         device::DeviceProxy, diagnostic::StationDiagnosticProxy, object_manager::ObjectManagerProxy,
@@ -36,24 +36,23 @@ impl ModelMonitoring for Station {
         let device_proxy = DeviceProxy::new(&self.zbus_connection, self.object_path.clone())
             .await
             .map_err(Error::DbusError)?;
-        let station_proxy = StationProxy::new(&self.zbus_connection, self.object_path.clone())
-            .await
-            .map_err(Error::DbusError)?;
         let object_manager = ObjectManagerProxy::new(&self.zbus_connection)
             .await
             .map_err(Error::DbusError)?;
 
-        // Register a SignalLevelAgent so IWD pushes bucketed strength changes for
-        // the connected link. Best-effort: if it fails, strength is still read
-        // when a connection comes up, just not updated continuously.
-        setup_signal_level_agent(&self.zbus_connection, &station_proxy, self.strength.clone()).await;
-
-        // Populate the initial scan list (IWD returns its last cached results).
-        self.refresh_networks().await;
-
+        let connection = self.zbus_connection.clone();
+        let object_path = self.object_path.clone();
         let weak_self = Arc::downgrade(&self);
         tokio::spawn(async move {
-            monitor(weak_self, device_proxy, station_proxy, object_manager, cancel).await;
+            monitor(
+                weak_self,
+                device_proxy,
+                object_manager,
+                connection,
+                object_path,
+                cancel,
+            )
+            .await;
         });
 
         Ok(())
@@ -72,14 +71,15 @@ fn is_descendant(candidate: &OwnedObjectPath, parent: &OwnedObjectPath) -> bool 
 async fn monitor(
     weak_station: Weak<Station>,
     device_proxy: DeviceProxy<'static>,
-    station_proxy: StationProxy<'static>,
     object_manager: ObjectManagerProxy<'static>,
+    connection: Connection,
+    object_path: OwnedObjectPath,
     cancellation_token: CancellationToken,
 ) {
+    // Device-level streams persist across power toggles: the `Device` interface
+    // (the Powered switch) and the ObjectManager survive while the `Station`
+    // interface comes and goes.
     let mut powered_changed = device_proxy.receive_powered_changed().await;
-    let mut state_changed = station_proxy.receive_state_changed().await;
-    let mut scanning_changed = station_proxy.receive_scanning_changed().await;
-    let mut connected_changed = station_proxy.receive_connected_network_changed().await;
     let mut interfaces_added = match object_manager.receive_interfaces_added().await {
         Ok(stream) => stream,
         Err(err) => {
@@ -94,103 +94,179 @@ async fn monitor(
             return;
         }
     };
-    loop {
-        let Some(station) = weak_station.upgrade() else {
-            return;
-        };
 
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                debug!("station monitor cancelled");
+    // Outer loop: (re)bind the Station-interface property streams. Mirrors iwgtk,
+    // which recreates its Station object — a fresh proxy and a fresh property
+    // subscription — every time the `Station` interface (re)appears. The previous
+    // subscription does not survive the interface being removed on power-off, so
+    // re-creating it here is what makes the post-power-on autoconnect/scan
+    // transitions visible. `continue 'session` rebinds when the interface
+    // reappears (handled in the `interfaces_added` arm below).
+    'session: loop {
+        let station_proxy = match StationProxy::new(&connection, object_path.clone()).await {
+            Ok(proxy) => proxy,
+            Err(err) => {
+                debug!(error = %err, "cannot create station proxy");
                 return;
             }
+        };
+        let mut state_changed = station_proxy.receive_state_changed().await;
+        let mut scanning_changed = station_proxy.receive_scanning_changed().await;
+        let mut connected_changed = station_proxy.receive_connected_network_changed().await;
 
-            Some(change) = powered_changed.next() => {
-                if let Ok(powered) = change.get().await {
-                    let was_powered = station.powered.get();
-                    station.powered.set(powered);
+        // Resync from the freshly-bound interface: register the signal-level
+        // agent and seed scanning/connection/diagnostics/networks from the live
+        // state. A no-op (read fails gracefully) while the interface is absent
+        // (device powered off) — we then wait for `interfaces_added` to rebind.
+        match weak_station.upgrade() {
+            Some(station) => resync(&station, &station_proxy).await,
+            None => return,
+        }
 
-                    if powered == was_powered {
-                        // Initial/no-op emission (e.g. at startup): do not scan.
-                    } else if powered {
-                        // Genuine off -> on: the Station interface reappears, so
-                        // re-read its state and scan for networks.
-                        station.resync_after_power_on().await;
-                    } else {
-                        // Genuine on -> off: clear station state.
+        loop {
+            let Some(station) = weak_station.upgrade() else {
+                return;
+            };
+
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    debug!("station monitor cancelled");
+                    return;
+                }
+
+                // Reflect the Powered switch. State (re)sync is driven by the
+                // Station interface appearing/disappearing, not by this property.
+                Some(change) = powered_changed.next() => {
+                    if let Ok(powered) = change.get().await {
+                        station.powered.set(powered);
+                    }
+                }
+
+                // `State` and `ConnectedNetwork` are reconciled identically — both
+                // re-read a coherent live snapshot rather than trusting the
+                // (possibly already-stale) signal payload, so the published state
+                // is never torn between the two properties.
+                Some(_) = state_changed.next() => {
+                    reconcile_connection(&station).await;
+                }
+
+                Some(change) = scanning_changed.next() => {
+                    if let Ok(scanning) = change.get().await {
+                        station.scanning.set(scanning);
+                        // A finished scan means fresh ordered-network results.
+                        if !scanning {
+                            station.refresh_networks().await;
+                        }
+                    }
+                }
+
+                Some(_) = connected_changed.next() => {
+                    reconcile_connection(&station).await;
+                }
+
+                Some(signal) = interfaces_added.next() => {
+                    let Ok(args) = signal.args() else { continue };
+
+                    // The Station interface (re)appeared on our device (power-on):
+                    // rebind its property streams against the live interface so the
+                    // ensuing autoconnect/scan transitions are observed.
+                    if args.interfaces.contains_key(STATION_INTERFACE)
+                        && args.object_path.as_str() == object_path.as_str()
+                    {
+                        continue 'session;
+                    }
+
+                    // During a scan IWD adds network objects in a rapid burst;
+                    // refreshing per-object would churn the list (and the open
+                    // dropdown) many times a second. Skip while scanning — the
+                    // `scanning -> false` edge above refreshes once when results
+                    // are final. Only out-of-scan appearances refresh here.
+                    if station.powered.get()
+                        && !station.scanning.get()
+                        && args.interfaces.contains_key(NETWORK_INTERFACE)
+                        && is_descendant(&args.object_path, &object_path)
+                    {
+                        station.refresh_networks().await;
+                    }
+                }
+
+                Some(signal) = interfaces_removed.next() => {
+                    let Ok(args) = signal.args() else { continue };
+
+                    // The Station interface went away (power-off): clear all
+                    // station-derived state. The stale streams are left until the
+                    // interface reappears and rebinds them.
+                    if args.interfaces.iter().any(|iface| iface.as_str() == STATION_INTERFACE)
+                        && args.object_path.as_str() == object_path.as_str()
+                    {
                         station.connection.set(ConnectionState::Idle);
                         station.scanning.set(false);
                         station.strength.set(None);
                         station.frequency.set(None);
                         station.networks.replace(Vec::new());
-                    }
-                }
-            }
-
-            Some(change) = state_changed.next() => {
-                if let Ok(state) = change.get().await {
-                    let connected_ssid =
-                        resolve_connected_ssid(&station.zbus_connection, &station.object_path).await;
-                    station.observe_connection(&state, connected_ssid);
-
-                    // Roaming is still an active link, so keep its diagnostics
-                    // (strength/frequency) current rather than clearing them.
-                    if state == "connected" || state == "roaming" {
-                        update_diagnostics(&station).await;
-                    } else {
-                        station.strength.set(None);
-                        station.frequency.set(None);
-                    }
-
-                    station.refresh_networks().await;
-                }
-            }
-
-            Some(change) = scanning_changed.next() => {
-                if let Ok(scanning) = change.get().await {
-                    station.scanning.set(scanning);
-                    // A finished scan means fresh ordered-network results.
-                    if !scanning {
+                    } else if station.powered.get()
+                        && !station.scanning.get()
+                        && args.interfaces.iter().any(|iface| iface.as_str() == NETWORK_INTERFACE)
+                        && is_descendant(&args.object_path, &object_path)
+                    {
                         station.refresh_networks().await;
                     }
                 }
-            }
 
-            Some(_) = connected_changed.next() => {
-                let connected_ssid =
-                    resolve_connected_ssid(&station.zbus_connection, &station.object_path).await;
-                // `ConnectedNetwork` changed but `State` did not, so read it
-                // fresh to classify the new connection correctly.
-                let state = station_proxy.state().await.unwrap_or_default();
-                station.observe_connection(&state, connected_ssid);
-                station.refresh_networks().await;
-            }
-
-            Some(signal) = interfaces_added.next() => {
-                if let Ok(args) = signal.args()
-                    && station.powered.get()
-                    && args.interfaces.contains_key(NETWORK_INTERFACE)
-                    && is_descendant(&args.object_path, &station.object_path)
-                {
-                    station.refresh_networks().await;
+                else => {
+                    return;
                 }
-            }
-
-            Some(signal) = interfaces_removed.next() => {
-                if let Ok(args) = signal.args()
-                    && station.powered.get()
-                    && args.interfaces.iter().any(|iface| iface.as_str() == NETWORK_INTERFACE)
-                    && is_descendant(&args.object_path, &station.object_path)
-                {
-                    station.refresh_networks().await;
-                }
-            }
-
-            else => {
-                break;
             }
         }
     }
+}
+
+/// (Re)synchronise all station-derived state from a freshly-bound `Station`
+/// interface: register the signal-level agent, seed `scanning`, and reconcile the
+/// connection (plus diagnostics and the network list). Called once each time the
+/// interface is (re)bound.
+///
+/// Does not initiate a scan: the network list is populated from IWD's cached
+/// `GetOrderedNetworks` results, and IWD performs its own scans (e.g. for
+/// autoconnect). Explicit scans are user-driven via the dropdown's scan button.
+async fn resync(station: &Station, station_proxy: &StationProxy<'static>) {
+    // Re-register the SignalLevelAgent so IWD pushes bucketed strength for the
+    // (re)appeared interface. Best-effort: if it fails, strength still comes from
+    // the connect-time diagnostics snapshot.
+    setup_signal_level_agent(&station.zbus_connection, station_proxy, station.strength.clone()).await;
+
+    station
+        .scanning
+        .set(station_proxy.scanning().await.unwrap_or(false));
+
+    reconcile_connection(station).await;
+}
+
+/// Reconcile all monitor-derived state from a single coherent live snapshot:
+/// publish the connection state (unless a foreground [`connect`](Station::connect)
+/// owns it), keep diagnostics current for an active link or clear them otherwise,
+/// and refresh the network list.
+///
+/// Skips entirely when the live state cannot be read, preserving the last known
+/// state rather than flickering a live connection to disconnected — the failure
+/// mode seen when signal streams go briefly stale across suspend/resume.
+async fn reconcile_connection(station: &Station) {
+    let Some((state, connected_ssid)) = station.read_station_snapshot().await else {
+        return;
+    };
+
+    station.observe_connection(&state, connected_ssid);
+
+    // Roaming is still an active link, so keep its diagnostics (strength/
+    // frequency) current rather than clearing them.
+    if state == "connected" || state == "roaming" {
+        update_diagnostics(station).await;
+    } else {
+        station.strength.set(None);
+        station.frequency.set(None);
+    }
+
+    station.refresh_networks().await;
 }
 
 /// Read diagnostics (RSSI -> strength, frequency) and publish them. Called from

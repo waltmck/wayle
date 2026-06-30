@@ -1,5 +1,7 @@
 //! Hand-written zbus proxies for the `net.connman.iwd` D-Bus interfaces.
 
+/// Adapter proxy (`net.connman.iwd.Adapter`).
+pub(crate) mod adapter;
 /// Agent manager proxy (`net.connman.iwd.AgentManager`).
 pub(crate) mod agent_manager;
 /// Per-station diagnostics proxy (`net.connman.iwd.StationDiagnostic`).

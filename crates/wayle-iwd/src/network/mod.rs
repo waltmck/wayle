@@ -5,6 +5,7 @@
 //! per-object monitoring; the [`Station`](crate::station::Station) re-fetches
 //! the list when the connection or scan state changes.
 
+use derive_more::Debug;
 use wayle_core::Property;
 use zbus::{Connection, zvariant::OwnedObjectPath};
 
@@ -16,8 +17,9 @@ use crate::{
 };
 
 /// A network visible to a station.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Network {
+    #[debug(skip)]
     connection: Connection,
     object_path: OwnedObjectPath,
     /// Network name (SSID).

@@ -8,7 +8,7 @@ pub(crate) struct ActiveConnectionsInit {
     pub config: Arc<ConfigService>,
 }
 
-pub(super) struct WifiState {
+pub(super) struct StationState {
     /// Service-owned, attempt-aware connection state — the single source of
     /// truth for what the card shows as the active connection.
     pub connection: ConnectionState,
@@ -17,7 +17,7 @@ pub(super) struct WifiState {
     pub hovered: bool,
 }
 
-impl WifiState {
+impl StationState {
     pub(super) fn from_station(station: &Station) -> Self {
         Self {
             connection: station.connection.get(),
@@ -28,7 +28,7 @@ impl WifiState {
     }
 }
 
-impl Default for WifiState {
+impl Default for StationState {
     fn default() -> Self {
         Self {
             connection: ConnectionState::Idle,
@@ -49,10 +49,10 @@ pub(super) struct ConnectionError {
 
 #[derive(Debug)]
 pub(crate) enum ActiveConnectionsInput {
-    DisconnectWifi,
-    ForgetWifi,
+    Disconnect,
+    Forget,
     DismissError,
-    WifiCardHovered(bool),
+    CardHovered(bool),
     /// Show a failed-connection error on the card, routed from the
     /// available-networks list (which owns the connect command and its result).
     ShowError { ssid: String, message: String },
@@ -61,7 +61,7 @@ pub(crate) enum ActiveConnectionsInput {
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum ActiveConnectionsCmd {
-    WifiChanged {
+    StateChanged {
         connection: ConnectionState,
         strength: Option<SignalStrength>,
         frequency: Option<u32>,

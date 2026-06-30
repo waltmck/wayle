@@ -12,6 +12,7 @@ name = "wayle_iwd"
 path = "src/lib.rs"
 
 [dependencies]
+derive_more.workspace = true
 futures.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

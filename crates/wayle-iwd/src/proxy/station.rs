@@ -22,9 +22,6 @@ pub(crate) trait Station {
         levels: &[i16],
     ) -> zbus::Result<()>;
 
-    /// Unregister a previously registered `SignalLevelAgent`.
-    fn unregister_signal_level_agent(&self, path: &ObjectPath<'_>) -> zbus::Result<()>;
-
     /// Disconnect from the current network and disable auto-connect until the
     /// next explicit connect.
     fn disconnect(&self) -> zbus::Result<()>;

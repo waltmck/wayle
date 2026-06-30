@@ -1,28 +1,36 @@
 use relm4::ComponentSender;
 use tracing::warn;
-use wayle_iwd::{ConnectionState, SignalStrength};
+use wayle_iwd::ConnectionState;
 
-use super::ActiveConnections;
+use super::{ActiveConnections, messages::ConnectionError};
 use crate::{i18n::t, shell::bar::dropdowns::iwd::helpers};
 
 impl ActiveConnections {
-    /// Whether a failed attempt should be shown. Suppressed once the station is
-    /// on a connection again (e.g. IWD rejected a passphrase without leaving the
-    /// current network), so the card never shows a phantom failed target.
+    /// The failure to display, if any. Present only while the station is
+    /// otherwise [`Idle`](ConnectionState::Idle), so a connection reconciled after
+    /// a failed attempt (e.g. IWD rejected a passphrase without leaving the
+    /// current network) suppresses the phantom failed target.
+    fn shown_error(&self) -> Option<&ConnectionError> {
+        self.error
+            .as_ref()
+            .filter(|_| matches!(self.station.connection, ConnectionState::Idle))
+    }
+
+    /// Whether a failed attempt should be shown on the card.
     pub(super) fn has_wifi_error(&self) -> bool {
-        self.error.is_some() && matches!(self.wifi.connection, ConnectionState::Idle)
+        self.shown_error().is_some()
     }
 
     pub(super) fn is_connecting(&self) -> bool {
-        matches!(self.wifi.connection, ConnectionState::Connecting { .. })
+        matches!(self.station.connection, ConnectionState::Connecting { .. })
     }
 
     pub(super) fn is_connected(&self) -> bool {
-        matches!(self.wifi.connection, ConnectionState::Connected { .. })
+        matches!(self.station.connection, ConnectionState::Connected { .. })
     }
 
     pub(super) fn is_roaming(&self) -> bool {
-        matches!(self.wifi.connection, ConnectionState::Roaming { .. })
+        matches!(self.station.connection, ConnectionState::Roaming { .. })
     }
 
     /// Whether there is an active connection (connected or roaming) — both show
@@ -46,20 +54,18 @@ impl ActiveConnections {
         self.is_connecting() || self.is_active() || self.has_wifi_error()
     }
 
-    pub(super) fn reset_wifi_watchers(&mut self, sender: &ComponentSender<Self>) {
-        let token = self.wifi_watcher.reset();
+    pub(super) fn reset_station_watchers(&mut self, sender: &ComponentSender<Self>) {
+        let token = self.station_watcher.reset();
 
-        super::watchers::spawn_wifi_watchers(sender, &self.iwd, token);
+        super::watchers::spawn_station_watchers(sender, &self.iwd, token);
     }
 
     pub(super) fn display_wifi_name(&self) -> String {
-        if let Some(error) = &self.error
-            && self.has_wifi_error()
-        {
+        if let Some(error) = self.shown_error() {
             return error.ssid.clone();
         }
 
-        if let Some(ssid) = self.wifi.connection.ssid() {
+        if let Some(ssid) = self.station.connection.ssid() {
             return ssid.to_string();
         }
 
@@ -82,17 +88,15 @@ impl ActiveConnections {
         // While connecting, `wifi.frequency` may still hold the *previous*
         // network's band until fresh diagnostics arrive, so only show the band
         // once on an active connection (connected or roaming).
-        self.has_wifi_error() || (self.is_active() && self.wifi.frequency.is_some())
+        self.has_wifi_error() || (self.is_active() && self.station.frequency.is_some())
     }
 
     pub(super) fn wifi_detail(&self) -> String {
-        if let Some(error) = &self.error
-            && self.has_wifi_error()
-        {
+        if let Some(error) = self.shown_error() {
             return error.message.clone();
         }
 
-        self.wifi
+        self.station
             .frequency
             .and_then(helpers::frequency_to_band)
             .map(str::to_string)
@@ -100,11 +104,7 @@ impl ActiveConnections {
     }
 
     pub(super) fn error_tooltip(&self) -> Option<&str> {
-        if !self.has_wifi_error() {
-            return None;
-        }
-
-        self.error.as_ref().map(|error| error.message.as_str())
+        self.shown_error().map(|error| error.message.as_str())
     }
 
     pub(super) fn wifi_detail_classes(&self) -> Vec<&'static str> {
@@ -140,14 +140,14 @@ impl ActiveConnections {
             return iwd.wifi_acquiring_icon.get();
         }
 
-        helpers::signal_strength_icon(
-            self.wifi.strength.unwrap_or(SignalStrength::None),
+        helpers::connected_signal_icon(
+            self.station.strength,
             &iwd.wifi_signal_icons.get(),
             &iwd.wifi_connected_icon.get(),
         )
     }
 
-    pub(super) fn disconnect_wifi(&self, sender: &ComponentSender<Self>) {
+    pub(super) fn disconnect(&self, sender: &ComponentSender<Self>) {
         let iwd = self.iwd.clone();
         sender.command(|_out, _shutdown| async move {
             if let Some(station) = iwd.station.get()
@@ -158,11 +158,11 @@ impl ActiveConnections {
         });
     }
 
-    pub(super) fn forget_wifi(&self, sender: &ComponentSender<Self>) {
+    pub(super) fn forget(&self, sender: &ComponentSender<Self>) {
         let iwd = self.iwd.clone();
         // The active connection is the connecting target or the connected
         // network — both carried by `connection`.
-        let ssid = self.wifi.connection.ssid().map(str::to_string);
+        let ssid = self.station.connection.ssid().map(str::to_string);
 
         sender.command(|_out, _shutdown| async move {
             let Some(ssid) = ssid else {

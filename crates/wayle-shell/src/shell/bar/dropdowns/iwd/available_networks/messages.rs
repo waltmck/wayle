@@ -24,8 +24,8 @@ pub(crate) struct AvailableNetworksInit {
 
 #[derive(Debug)]
 pub(crate) enum AvailableNetworksInput {
-    WifiAvailabilityChanged(bool),
-    WifiEnabledChanged(bool),
+    StationAvailabilityChanged(bool),
+    PoweredChanged(bool),
     NetworkSelected(usize),
     ForgetNetwork(OwnedObjectPath),
     PasswordForm(PasswordFormOutput),

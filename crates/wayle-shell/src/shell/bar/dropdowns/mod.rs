@@ -11,6 +11,8 @@ mod notification;
 mod registry;
 mod weather;
 
+use wayle_iwd::SignalStrength;
+
 pub(crate) use self::registry::{
     DropdownFactory, DropdownInstance, DropdownRegistry, dispatch_click, dispatch_click_widget,
     require_service,
@@ -33,9 +35,41 @@ pub(crate) fn frequency_to_band(freq_mhz: u32) -> Option<&'static str> {
     }
 }
 
+/// Picks the configured signal-strength icon for a bucket, scaling the bucket
+/// onto the configured icon list; `fallback` (the configured "connected, strength
+/// unknown" icon) is used when the list is empty. Shared by the IWD bar module
+/// and dropdown.
+pub(crate) fn signal_strength_icon(
+    strength: SignalStrength,
+    icons: &[String],
+    fallback: &str,
+) -> String {
+    strength
+        .icon_index(icons.len())
+        .and_then(|idx| icons.get(idx))
+        .cloned()
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Icon for a connected link's signal, treating unknown strength (`None`) as the
+/// weakest [`SignalStrength::None`] bucket — so it shows the configured `icons[0]`
+/// (e.g. `cm-wireless-signal-none-symbolic`) rather than a distinct placeholder.
+/// `fallback` (the "connected, strength unknown" icon) applies only when the icon
+/// list is empty. Shared by the IWD bar module and the dropdown's
+/// active-connection card.
+pub(crate) fn connected_signal_icon(
+    strength: Option<SignalStrength>,
+    icons: &[String],
+    fallback: &str,
+) -> String {
+    signal_strength_icon(strength.unwrap_or(SignalStrength::None), icons, fallback)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::frequency_to_band;
+    use wayle_iwd::SignalStrength;
+
+    use super::{connected_signal_icon, frequency_to_band, signal_strength_icon};
 
     #[test]
     fn frequency_2ghz_band() {
@@ -67,6 +101,44 @@ mod tests {
     fn frequency_unknown_band() {
         assert_eq!(frequency_to_band(0), None);
         assert_eq!(frequency_to_band(900), None);
+    }
+
+    #[test]
+    fn signal_icon_buckets() {
+        // A 4-icon list (no "none" entry) maps both None and Weak to the weakest
+        // icon. (The shipped iwd default is a 5-icon list that includes "none".)
+        let icons = vec![
+            String::from("weak"),
+            String::from("ok"),
+            String::from("good"),
+            String::from("excellent"),
+        ];
+        assert_eq!(signal_strength_icon(SignalStrength::None, &icons, "connected"), "weak");
+        assert_eq!(signal_strength_icon(SignalStrength::Weak, &icons, "connected"), "weak");
+        assert_eq!(signal_strength_icon(SignalStrength::Ok, &icons, "connected"), "ok");
+        assert_eq!(signal_strength_icon(SignalStrength::Good, &icons, "connected"), "good");
+        assert_eq!(
+            signal_strength_icon(SignalStrength::Excellent, &icons, "connected"),
+            "excellent"
+        );
+        // Empty list falls back to the configured connected icon.
+        assert_eq!(signal_strength_icon(SignalStrength::Good, &[], "connected"), "connected");
+    }
+
+    #[test]
+    fn connected_signal_icon_maps_unknown_to_none_bucket() {
+        let icons = vec![
+            String::from("none"),
+            String::from("weak"),
+            String::from("ok"),
+            String::from("good"),
+            String::from("excellent"),
+        ];
+        // Unknown strength renders the weakest/"none" icon, not the fallback.
+        assert_eq!(connected_signal_icon(None, &icons, "connected"), "none");
+        assert_eq!(connected_signal_icon(Some(SignalStrength::Good), &icons, "connected"), "good");
+        // Fallback applies only when the list is empty.
+        assert_eq!(connected_signal_icon(None, &[], "connected"), "connected");
     }
 }
 

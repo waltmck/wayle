@@ -10,7 +10,7 @@ use crate::shell::bar::dropdowns::iwd::active_connections::{
     ActiveConnections, messages::ActiveConnectionsCmd,
 };
 
-pub(super) fn spawn_wifi_watchers(
+pub(super) fn spawn_station_watchers(
     sender: &ComponentSender<ActiveConnections>,
     iwd: &Arc<IwdService>,
     token: CancellationToken,
@@ -28,7 +28,7 @@ pub(super) fn spawn_wifi_watchers(
         token,
         [connection.watch(), strength.watch(), frequency.watch()],
         |out| {
-            let _ = out.send(ActiveConnectionsCmd::WifiChanged {
+            let _ = out.send(ActiveConnectionsCmd::StateChanged {
                 connection: connection.get(),
                 strength: strength.get(),
                 frequency: frequency.get(),

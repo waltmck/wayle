@@ -3,15 +3,15 @@ use wayle_iwd::IwdService;
 
 use super::{
     IwdModule,
-    helpers::{WifiContext, wifi_icon, wifi_label},
+    helpers::{StationContext, wifi_icon, wifi_label},
 };
 use crate::i18n::t;
 
 impl IwdModule {
     pub(super) fn compute_display(config: &IwdConfig, iwd: &IwdService) -> (String, String) {
         if let Some(station) = iwd.station.get() {
-            let ctx = WifiContext {
-                enabled: station.powered.get(),
+            let ctx = StationContext {
+                powered: station.powered.get(),
                 connection: station.connection.get(),
                 strength: station.strength.get(),
             };

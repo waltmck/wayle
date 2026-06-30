@@ -11,9 +11,10 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use derive_more::Debug;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use wayle_core::Property;
+use wayle_core::{NULL_PATH, Property};
 use wayle_traits::{ModelMonitoring, Reactive};
 use zbus::{Connection, zvariant::OwnedObjectPath};
 
@@ -44,7 +45,7 @@ pub struct LiveStationParams<'a> {
 
 pub(crate) fn is_real_path(path: &OwnedObjectPath) -> bool {
     let s = path.as_str();
-    !s.is_empty() && s != "/"
+    !s.is_empty() && s != NULL_PATH
 }
 
 /// Whether a D-Bus error is the named IWD method error (e.g.
@@ -75,11 +76,14 @@ impl Drop for AttemptGuard {
 }
 
 /// A WiFi station: connection state, scan results, and controls.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Station {
+    #[debug(skip)]
     zbus_connection: Connection,
     object_path: OwnedObjectPath,
+    #[debug(skip)]
     cancellation_token: Option<CancellationToken>,
+    #[debug(skip)]
     passphrases: Arc<PassphraseStore>,
     /// Number of foreground [`connect`](Self::connect) attempts in progress.
     /// While non-zero the monitor leaves [`connection`](Self::connection) to the
@@ -381,19 +385,16 @@ impl Station {
         self.connection.set(connection);
     }
 
-    /// Read a coherent snapshot of the live `Station.State` and connected SSID
-    /// from a single proxy.
+    /// Read a coherent snapshot of the live `Station.State` and connected SSID.
     ///
     /// Returns `None` only if the `Station` interface is transiently unavailable
     /// (e.g. across suspend/resume, or while IWD is restarting) so the background
     /// monitor can preserve the last known state instead of flickering a live
-    /// connection to disconnected. Reading both off one proxy back-to-back keeps
-    /// the `(state, ssid)` pair coherent.
+    /// connection to disconnected. See [`read_station`] for the coherence guarantee.
     pub(crate) async fn read_station_snapshot(&self) -> Option<(String, Option<String>)> {
-        let proxy = self.station_proxy().await.ok()?;
-        let state = proxy.state().await.ok()?;
-        let connected_ssid = resolve_connected_ssid(&self.zbus_connection, &proxy).await;
-        Some((state, connected_ssid))
+        read_station(&self.zbus_connection, &self.object_path)
+            .await
+            .map(|(state, _scanning, connected_ssid)| (state, connected_ssid))
     }
 
     async fn station_proxy(&self) -> Result<StationProxy<'static>, Error> {
@@ -455,7 +456,7 @@ impl Station {
         };
 
         let (state, scanning, connected_ssid) = if powered {
-            read_station_state(connection, &path).await
+            read_station(connection, &path).await.unwrap_or_default()
         } else {
             (String::new(), false, None)
         };
@@ -478,21 +479,20 @@ impl Station {
     }
 }
 
-/// Reads the `Station`-interface state (raw `State` string / scanning / connected
-/// SSID), defaulting gracefully if the interface is absent (device powered off).
-async fn read_station_state(
+/// Read a coherent `(state, scanning, connected_ssid)` snapshot from a freshly
+/// created `Station` proxy. Returns `None` when the `Station` interface is
+/// unavailable (device powered off, or IWD restarting) so callers can preserve
+/// the last known state instead of flickering; reading every field off one proxy
+/// back-to-back keeps the tuple coherent.
+async fn read_station(
     connection: &Connection,
     path: &OwnedObjectPath,
-) -> (String, bool, Option<String>) {
-    let Ok(station_proxy) = StationProxy::new(connection, path.clone()).await else {
-        return (String::new(), false, None);
-    };
-
-    let state = station_proxy.state().await.unwrap_or_default();
-    let scanning = station_proxy.scanning().await.unwrap_or(false);
-    let connected_ssid = resolve_connected_ssid(connection, &station_proxy).await;
-
-    (state, scanning, connected_ssid)
+) -> Option<(String, bool, Option<String>)> {
+    let proxy = StationProxy::new(connection, path.clone()).await.ok()?;
+    let state = proxy.state().await.ok()?;
+    let scanning = proxy.scanning().await.unwrap_or(false);
+    let connected_ssid = resolve_connected_ssid(connection, &proxy).await;
+    Some((state, scanning, connected_ssid))
 }
 
 /// Resolve the SSID of the station's connected network, if any, reusing an

@@ -16,7 +16,7 @@ use crate::{
     discovery::{DEVICE_INTERFACE, IwdDiscovery},
     error::Error,
     proxy::object_manager::ObjectManagerProxy,
-    service::{IwdService, build_station},
+    service::{IwdService, build_station, register_agent_with_iwd},
     station::Station,
 };
 
@@ -87,6 +87,11 @@ async fn spawn_station_monitoring(
                         }
                         Some(_) => {
                             debug!("iwd (re)appeared on the bus; rebuilding station");
+                            // IWD's agent registry is per-instance, so re-register
+                            // our passphrase agent before rebuilding — otherwise a
+                            // secured connect after an IWD restart fails with
+                            // NoAgent (mirrors iwgtk's per-iwd_up agent_register).
+                            register_agent_with_iwd(&connection).await;
                             let new_station = match IwdDiscovery::device_path(&connection).await {
                                 Ok(Some(path)) => {
                                     build_station(

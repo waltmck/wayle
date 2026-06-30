@@ -35,8 +35,13 @@ pub(super) fn spawn_config_watchers(
     let icons = &config.config().modules.iwd;
     let signal = icons.wifi_signal_icons.clone();
     let connected = icons.wifi_connected_icon.clone();
+    let disabled = icons.wifi_disabled_icon.clone();
 
-    watch!(sender, [signal.watch(), connected.watch()], |out| {
-        let _ = out.send(AvailableNetworksCmd::ConfigChanged);
-    });
+    watch!(
+        sender,
+        [signal.watch(), connected.watch(), disabled.watch()],
+        |out| {
+            let _ = out.send(AvailableNetworksCmd::ConfigChanged);
+        }
+    );
 }

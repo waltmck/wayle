@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use derive_more::Debug;
 use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
 use wayle_core::Property;
@@ -20,9 +21,13 @@ use crate::{
 ///
 /// Mirrors the WiFi surface of `wayle-network`'s `NetworkService`, but is
 /// WiFi-only (IWD does not manage wired connections or IP configuration).
+#[derive(Debug)]
 pub struct IwdService {
+    #[debug(skip)]
     pub(crate) zbus_connection: Connection,
+    #[debug(skip)]
     pub(crate) cancellation_token: CancellationToken,
+    #[debug(skip)]
     pub(crate) passphrases: Arc<PassphraseStore>,
     /// WiFi station, if a device is present (live-updated on hot-plug).
     pub station: Property<Option<Arc<Station>>>,
@@ -72,6 +77,7 @@ impl Drop for IwdService {
     }
 }
 
+/// Serve our passphrase [`Agent`] object and register it with IWD.
 async fn register_agent(
     connection: &Connection,
     passphrases: Arc<PassphraseStore>,
@@ -82,19 +88,43 @@ async fn register_agent(
 
     connection
         .object_server()
-        .at(agent_path.clone(), Agent::new(passphrases))
+        .at(agent_path, Agent::new(passphrases))
         .await
         .map_err(Error::DbusError)?;
 
-    let manager = AgentManagerProxy::new(connection)
-        .await
-        .map_err(Error::DbusError)?;
+    register_agent_with_iwd(connection).await;
+
+    Ok(())
+}
+
+/// (Re)register the already-served passphrase agent with IWD's `AgentManager`.
+///
+/// IWD's record of a registered agent is per-daemon-instance and is lost when
+/// IWD restarts, so this must be re-issued whenever IWD re-appears on the bus
+/// (mirroring iwgtk's per-`iwd_up` `agent_register`). Only the IWD-facing
+/// registration is repeated — the served object persists across an IWD restart,
+/// so it is not (and must not be) re-served. Best-effort: a failure is logged and
+/// passphrase prompts are simply unavailable until the next attempt.
+pub(crate) async fn register_agent_with_iwd(connection: &Connection) {
+    let agent_path = match zbus::zvariant::ObjectPath::try_from(AGENT_PATH) {
+        Ok(path) => path,
+        Err(err) => {
+            warn!(error = %err, "invalid iwd agent path; cannot register agent");
+            return;
+        }
+    };
+
+    let manager = match AgentManagerProxy::new(connection).await {
+        Ok(manager) => manager,
+        Err(err) => {
+            warn!(error = %err, "cannot reach iwd AgentManager; passphrase prompts may be unavailable");
+            return;
+        }
+    };
 
     if let Err(err) = manager.register_agent(&agent_path).await {
         warn!(error = %err, "cannot register iwd agent; passphrase prompts may be unavailable");
     }
-
-    Ok(())
 }
 
 /// Build a live [`Station`], logging and returning `None` on failure.

@@ -20,10 +20,7 @@ use self::{
 };
 use crate::{
     i18n::t,
-    shell::bar::dropdowns::iwd::{
-        helpers::NetworkSnapshot,
-        password_form::{PasswordForm, PasswordFormInput},
-    },
+    shell::bar::dropdowns::iwd::password_form::{PasswordForm, PasswordFormInput},
 };
 
 pub(crate) struct AvailableNetworks {
@@ -32,11 +29,10 @@ pub(crate) struct AvailableNetworks {
     wifi_available: bool,
     powered: bool,
     network_list: FactoryVecDeque<NetworkItem>,
-    ap_cache: Vec<NetworkSnapshot>,
     state: ListState,
     selection: Option<SelectedNetwork>,
     password_form: Controller<PasswordForm>,
-    ap_watcher: WatcherToken,
+    networks_watcher: WatcherToken,
 }
 
 #[derive(PartialEq)]
@@ -81,7 +77,7 @@ impl Component for AvailableNetworks {
                 set_overflow: gtk::Overflow::Hidden,
                 set_vexpand: true,
                 #[watch]
-                set_visible: model.wifi_available && model.powered && !model.ap_cache.is_empty(),
+                set_visible: model.wifi_available && model.powered && !model.network_list.is_empty(),
 
                 #[name = "network_list_scroll"]
                 gtk::ScrolledWindow {
@@ -104,7 +100,7 @@ impl Component for AvailableNetworks {
                 #[watch]
                 set_visible: model.wifi_available
                     && model.powered
-                    && model.ap_cache.is_empty()
+                    && model.network_list.is_empty()
                     && model.state != ListState::PasswordEntry,
 
                 #[template]
@@ -112,7 +108,8 @@ impl Component for AvailableNetworks {
                     #[template_child]
                     icon {
                         add_css_class: "sm",
-                        set_icon_name: Some("cm-wireless-disabled-symbolic"),
+                        #[watch]
+                        set_icon_name: Some(model.disabled_icon().as_str()),
                     },
                     #[template_child]
                     title {
@@ -135,7 +132,8 @@ impl Component for AvailableNetworks {
                     #[template_child]
                     icon {
                         add_css_class: "sm",
-                        set_icon_name: Some("cm-wireless-disabled-symbolic"),
+                        #[watch]
+                        set_icon_name: Some(model.disabled_icon().as_str()),
                     },
                     #[template_child]
                     title {
@@ -199,15 +197,14 @@ impl Component for AvailableNetworks {
             wifi_available,
             powered,
             network_list,
-            ap_cache: vec![],
             state: ListState::Normal,
             selection: None,
             password_form,
-            ap_watcher: WatcherToken::new(),
+            networks_watcher: WatcherToken::new(),
         };
 
         if let Some(station) = station {
-            let token = model.ap_watcher.reset();
+            let token = model.networks_watcher.reset();
             watchers::spawn(&sender, &station, token);
         }
 
@@ -225,10 +222,10 @@ impl Component for AvailableNetworks {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
-            AvailableNetworksInput::WifiAvailabilityChanged(available) => {
+            AvailableNetworksInput::StationAvailabilityChanged(available) => {
                 self.handle_wifi_availability(available, &sender);
             }
-            AvailableNetworksInput::WifiEnabledChanged(enabled) => {
+            AvailableNetworksInput::PoweredChanged(enabled) => {
                 self.handle_wifi_enabled(enabled);
             }
             AvailableNetworksInput::NetworkSelected(index) => {

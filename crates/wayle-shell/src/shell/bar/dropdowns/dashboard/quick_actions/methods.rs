@@ -31,6 +31,10 @@ impl QuickActionsSection {
     pub(super) fn toggle_wifi(&self, sender: &ComponentSender<Self>) {
         let target = !self.wifi_active;
 
+        // NetworkManager takes precedence; IWD is the fallback — the same ordering
+        // as `wifi_enabled_property`. The toggle is hand-rolled rather than sharing
+        // that helper because the two backends expose different setters
+        // (`set_enabled` vs `set_powered`) with different error types.
         if let Some(network) = self.network.clone() {
             sender.oneshot_command(async move {
                 if let Some(wifi) = network.wifi.get()

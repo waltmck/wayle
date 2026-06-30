@@ -49,7 +49,7 @@ impl Component for IwdDropdown {
     view! {
         #[root]
         gtk::Popover {
-            set_css_classes: &["dropdown", "network-dropdown", "iwd-dropdown"],
+            set_css_classes: &["dropdown", "network-dropdown"],
             set_has_arrow: false,
             #[watch]
             set_width_request: model.scaled_width,
@@ -93,15 +93,15 @@ impl Component for IwdDropdown {
                         #[template]
                         Switch {
                             #[watch]
-                            #[block_signal(wifi_toggle_handler)]
+                            #[block_signal(power_toggle_handler)]
                             set_active: model.powered,
                             #[watch]
                             set_visible: model.station_available,
                             connect_state_set[sender] => move |switch, active| {
-                                sender.input(IwdDropdownMsg::WifiToggled(active));
+                                sender.input(IwdDropdownMsg::PowerToggled(active));
                                 switch.set_state(active);
                                 gtk::glib::Propagation::Stop
-                            } @wifi_toggle_handler,
+                            } @power_toggle_handler,
                         },
                     },
                 },
@@ -174,7 +174,7 @@ impl Component for IwdDropdown {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
-            IwdDropdownMsg::WifiToggled(active) => {
+            IwdDropdownMsg::PowerToggled(active) => {
                 self.toggle_powered(active, &sender);
             }
             IwdDropdownMsg::ScanRequested => {
@@ -203,7 +203,7 @@ impl Component for IwdDropdown {
                 self.scanning = station.as_ref().is_some_and(|station| station.scanning.get());
 
                 self.available_networks
-                    .emit(AvailableNetworksInput::WifiAvailabilityChanged(
+                    .emit(AvailableNetworksInput::StationAvailabilityChanged(
                         self.station_available,
                     ));
 
@@ -216,7 +216,7 @@ impl Component for IwdDropdown {
                 if powered != self.powered {
                     self.powered = powered;
                     self.available_networks
-                        .emit(AvailableNetworksInput::WifiEnabledChanged(powered));
+                        .emit(AvailableNetworksInput::PoweredChanged(powered));
                 }
             }
         }

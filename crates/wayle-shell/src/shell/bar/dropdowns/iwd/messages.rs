@@ -12,7 +12,7 @@ pub(crate) struct IwdDropdownInit {
 
 #[derive(Debug)]
 pub(crate) enum IwdDropdownMsg {
-    WifiToggled(bool),
+    PowerToggled(bool),
     /// Trigger a scan (from the Scan button).
     ScanRequested,
     AvailableNetworks(AvailableNetworksOutput),

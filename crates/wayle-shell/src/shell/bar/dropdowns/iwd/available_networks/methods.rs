@@ -121,7 +121,7 @@ impl AvailableNetworks {
         let station = self.iwd.station.get();
         self.powered = station.as_ref().is_some_and(|station| station.powered.get());
 
-        let token = self.ap_watcher.reset();
+        let token = self.networks_watcher.reset();
         if let Some(station) = station {
             watchers::spawn(sender, &station, token);
         }
@@ -142,7 +142,6 @@ impl AvailableNetworks {
             return;
         }
 
-        self.ap_cache.clear();
         self.network_list.guard().clear();
         self.state = ListState::Normal;
         self.clear_selection();
@@ -158,6 +157,12 @@ impl AvailableNetworks {
             .station
             .get()
             .and_then(|station| station.connection.get().ssid().map(str::to_string))
+    }
+
+    /// The configured "WiFi disabled" icon, shown in the powered-off and
+    /// no-networks empty states.
+    pub(super) fn disabled_icon(&self) -> String {
+        self.config.config().modules.iwd.wifi_disabled_icon.get()
     }
 
     /// Resolve the configured signal-strength icon for a bucket.
@@ -254,7 +259,6 @@ impl AvailableNetworks {
         }
 
         drop(guard);
-        self.ap_cache = snapshots;
     }
 
     /// Dismiss the password prompt when it is no longer relevant: the target
@@ -296,28 +300,34 @@ impl AvailableNetworks {
     }
 
     pub(super) fn select_network(&mut self, index: usize, sender: &ComponentSender<Self>) {
-        let Some(network) = self.ap_cache.get(index) else {
+        // The chosen factory row is the single source of per-network state; copy
+        // out what we need before mutating self (ending the factory borrow).
+        let Some(item) = self.network_list.get(index) else {
             return;
         };
+        let network_path = item.object_path().clone();
+        let ssid = item.ssid().to_string();
+        let security = item.security();
+        let strength = item.strength();
+        let known = item.known();
 
-        let security_label = translate_security_type(network.security);
-        let strength = network.strength;
+        let security_label = translate_security_type(security);
         let signal_icon = self.signal_icon(strength);
-        let secured = helpers::requires_password(network.security);
+        let secured = helpers::requires_password(security);
 
         self.selection = Some(SelectedNetwork {
-            network_path: network.object_path.clone(),
-            ssid: network.ssid.clone(),
+            network_path,
+            ssid: ssid.clone(),
             security_label: security_label.clone(),
             strength,
             secured,
         });
 
-        if secured && !network.known {
+        if secured && !known {
             self.state = ListState::PasswordEntry;
 
             self.password_form.emit(PasswordFormInput::Show {
-                ssid: network.ssid.clone(),
+                ssid,
                 security_label,
                 signal_icon,
                 error_message: None,

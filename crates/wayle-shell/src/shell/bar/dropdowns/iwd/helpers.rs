@@ -3,7 +3,9 @@ use std::{collections::HashSet, sync::Arc};
 use wayle_iwd::{Network, SecurityType, SignalStrength};
 use zbus::zvariant::OwnedObjectPath;
 
-pub(crate) use crate::shell::bar::dropdowns::frequency_to_band;
+pub(crate) use crate::shell::bar::dropdowns::{
+    connected_signal_icon, frequency_to_band, signal_strength_icon,
+};
 
 /// Snapshot of an IWD network for display in the network list.
 #[derive(Debug, Clone)]
@@ -13,21 +15,6 @@ pub(crate) struct NetworkSnapshot {
     pub security: SecurityType,
     pub object_path: OwnedObjectPath,
     pub known: bool,
-}
-
-/// Picks the configured signal-strength icon for a bucket, scaling the bucket
-/// onto the configured icon list (`config.wifi_signal_icons`); `fallback` is the
-/// configured "connected, strength unknown" icon used when the list is empty.
-pub(crate) fn signal_strength_icon(
-    strength: SignalStrength,
-    icons: &[String],
-    fallback: &str,
-) -> String {
-    strength
-        .icon_index(icons.len())
-        .and_then(|idx| icons.get(idx))
-        .cloned()
-        .unwrap_or_else(|| fallback.to_string())
 }
 
 pub(crate) fn requires_password(security: SecurityType) -> bool {
@@ -81,28 +68,6 @@ pub(crate) fn unique_networks(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn signal_icon_buckets() {
-        // Default config: 4 icons (weak/ok/good/excellent), no "none" — so None
-        // and Weak both map to the weakest icon.
-        let icons = vec![
-            String::from("weak"),
-            String::from("ok"),
-            String::from("good"),
-            String::from("excellent"),
-        ];
-        assert_eq!(signal_strength_icon(SignalStrength::None, &icons, "connected"), "weak");
-        assert_eq!(signal_strength_icon(SignalStrength::Weak, &icons, "connected"), "weak");
-        assert_eq!(signal_strength_icon(SignalStrength::Ok, &icons, "connected"), "ok");
-        assert_eq!(signal_strength_icon(SignalStrength::Good, &icons, "connected"), "good");
-        assert_eq!(
-            signal_strength_icon(SignalStrength::Excellent, &icons, "connected"),
-            "excellent"
-        );
-        // Empty list falls back to the configured connected icon.
-        assert_eq!(signal_strength_icon(SignalStrength::Good, &[], "connected"), "connected");
-    }
 
     #[test]
     fn requires_password_logic() {

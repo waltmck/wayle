@@ -1,5 +1,6 @@
 use gtk::{pango, prelude::*};
 use relm4::{gtk, prelude::*};
+use wayle_iwd::{SecurityType, SignalStrength};
 use wayle_widgets::prelude::*;
 use zbus::zvariant::OwnedObjectPath;
 
@@ -23,7 +24,13 @@ pub(super) struct NetworkItem {
     security_label: String,
     object_path: OwnedObjectPath,
 
-    is_secured: bool,
+    /// Raw security/strength carried so the parent can build a [`SelectedNetwork`]
+    /// straight from the chosen row — the row is the single source of per-network
+    /// state (there is no parallel snapshot cache).
+    ///
+    /// [`SelectedNetwork`]: super::messages::SelectedNetwork
+    security: SecurityType,
+    strength: SignalStrength,
     known: bool,
     hovered: bool,
 }
@@ -32,6 +39,26 @@ impl NetworkItem {
     /// SSID, the stable identity used to reconcile the list in place.
     pub(super) fn ssid(&self) -> &str {
         &self.ssid
+    }
+
+    /// D-Bus object path of this network (the connect/forget target).
+    pub(super) fn object_path(&self) -> &OwnedObjectPath {
+        &self.object_path
+    }
+
+    /// Security classification, used to derive the connect flow.
+    pub(super) fn security(&self) -> SecurityType {
+        self.security
+    }
+
+    /// Signal bucket, carried through to the password form's icon.
+    pub(super) fn strength(&self) -> SignalStrength {
+        self.strength
+    }
+
+    /// Whether credentials for this network are already saved.
+    pub(super) fn known(&self) -> bool {
+        self.known
     }
 
     /// Whether this row can be updated in place for `snapshot`, or must be
@@ -46,7 +73,8 @@ impl NetworkItem {
     /// avoiding a destroy/recreate of the row widget.
     pub(super) fn refresh(&mut self, snapshot: &NetworkSnapshot, icon: String) {
         self.icon = icon;
-        self.is_secured = helpers::requires_password(snapshot.security);
+        self.security = snapshot.security;
+        self.strength = snapshot.strength;
         self.security_label = security_label(snapshot);
         self.object_path = snapshot.object_path.clone();
     }
@@ -127,7 +155,7 @@ impl FactoryComponent for NetworkItem {
                 set_valign: gtk::Align::Center,
                 set_hexpand: false,
                 #[watch]
-                set_visible: self.is_secured || self.known,
+                set_visible: helpers::requires_password(self.security) || self.known,
 
                 add_named[Some("lock")] = &gtk::Box {
                     set_halign: gtk::Align::End,
@@ -139,7 +167,7 @@ impl FactoryComponent for NetworkItem {
                         set_icon_name: Some("ld-lock-symbolic"),
                         set_valign: gtk::Align::Center,
                         #[watch]
-                        set_visible: self.is_secured,
+                        set_visible: helpers::requires_password(self.security),
                     },
                 },
 
@@ -173,7 +201,8 @@ impl FactoryComponent for NetworkItem {
         let NetworkItemInit { snapshot, icon } = init;
         Self {
             icon,
-            is_secured: helpers::requires_password(snapshot.security),
+            security: snapshot.security,
+            strength: snapshot.strength,
             known: snapshot.known,
             hovered: false,
             security_label: security_label(&snapshot),

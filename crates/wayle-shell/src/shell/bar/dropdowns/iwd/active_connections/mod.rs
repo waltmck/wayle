@@ -10,18 +10,18 @@ use wayle_config::ConfigService;
 use wayle_iwd::{ConnectionState, IwdService};
 use wayle_widgets::{WatcherToken, prelude::*};
 
-use self::messages::{ActiveConnectionsCmd, ConnectionError, WifiState};
+use self::messages::{ActiveConnectionsCmd, ConnectionError, StationState};
 pub(crate) use self::messages::{ActiveConnectionsInit, ActiveConnectionsInput};
 use crate::i18n::t;
 
 pub(crate) struct ActiveConnections {
     iwd: Arc<IwdService>,
     config: Arc<ConfigService>,
-    wifi: WifiState,
+    station: StationState,
     /// Transient, shell-owned failure display (mirrors the NM dropdown). Shown
-    /// only while `wifi.connection` is `Idle` — see [`Self::has_wifi_error`].
+    /// only while `station.connection` is `Idle` — see [`Self::has_wifi_error`].
     error: Option<ConnectionError>,
-    wifi_watcher: WatcherToken,
+    station_watcher: WatcherToken,
 }
 
 #[relm4::component(pub(crate))]
@@ -153,7 +153,7 @@ impl Component for ActiveConnections {
                                 label {
                                     set_label: &t!("dropdown-iwd-disconnect"),
                                 },
-                                connect_clicked => ActiveConnectionsInput::DisconnectWifi,
+                                connect_clicked => ActiveConnectionsInput::Disconnect,
                             },
 
                             #[template]
@@ -163,7 +163,7 @@ impl Component for ActiveConnections {
                                 label {
                                     set_label: &t!("dropdown-iwd-forget"),
                                 },
-                                connect_clicked => ActiveConnectionsInput::ForgetWifi,
+                                connect_clicked => ActiveConnectionsInput::Forget,
                             },
                         },
 
@@ -198,7 +198,7 @@ impl Component for ActiveConnections {
                                 // Cancelling an in-progress connection is just a
                                 // disconnect; the service then reconciles us out
                                 // of the Connecting state.
-                                connect_clicked => ActiveConnectionsInput::DisconnectWifi,
+                                connect_clicked => ActiveConnectionsInput::Disconnect,
                             },
 
                             #[template]
@@ -208,17 +208,17 @@ impl Component for ActiveConnections {
                                 label {
                                     set_label: &t!("dropdown-iwd-forget"),
                                 },
-                                connect_clicked => ActiveConnectionsInput::ForgetWifi,
+                                connect_clicked => ActiveConnectionsInput::Forget,
                             },
                         },
 
                         #[watch]
                         set_visible_child_name:
-                            if model.wifi.hovered && model.is_connecting() {
+                            if model.station.hovered && model.is_connecting() {
                                 "cancel-actions"
-                            } else if model.wifi.hovered && model.is_active() {
+                            } else if model.station.hovered && model.is_active() {
                                 "actions"
-                            } else if model.wifi.hovered && model.has_wifi_error() {
+                            } else if model.station.hovered && model.has_wifi_error() {
                                 "error-actions"
                             } else {
                                 "status"
@@ -234,25 +234,25 @@ impl Component for ActiveConnections {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let wifi = init
+        let station = init
             .iwd
             .station
             .get()
-            .map(|station| WifiState::from_station(&station))
+            .map(|station| StationState::from_station(&station))
             .unwrap_or_default();
 
         let mut model = Self {
             iwd: init.iwd.clone(),
             config: init.config.clone(),
-            wifi,
+            station,
             error: None,
-            wifi_watcher: WatcherToken::new(),
+            station_watcher: WatcherToken::new(),
         };
 
         watchers::spawn_device_watchers(&sender, &init.iwd);
         watchers::spawn_config_watchers(&sender, &init.config);
 
-        model.reset_wifi_watchers(&sender);
+        model.reset_station_watchers(&sender);
 
         let widgets = view_output!();
 
@@ -260,12 +260,12 @@ impl Component for ActiveConnections {
 
         let hover_sender = sender.input_sender().clone();
         hover.connect_enter(move |_, _, _| {
-            hover_sender.emit(ActiveConnectionsInput::WifiCardHovered(true));
+            hover_sender.emit(ActiveConnectionsInput::CardHovered(true));
         });
 
         let leave_sender = sender.input_sender().clone();
         hover.connect_leave(move |_| {
-            leave_sender.emit(ActiveConnectionsInput::WifiCardHovered(false));
+            leave_sender.emit(ActiveConnectionsInput::CardHovered(false));
         });
 
         widgets.wifi_card.add_controller(hover);
@@ -275,19 +275,19 @@ impl Component for ActiveConnections {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
-            ActiveConnectionsInput::DisconnectWifi => self.disconnect_wifi(&sender),
-            ActiveConnectionsInput::ForgetWifi => self.forget_wifi(&sender),
+            ActiveConnectionsInput::Disconnect => self.disconnect(&sender),
+            ActiveConnectionsInput::Forget => self.forget(&sender),
             ActiveConnectionsInput::DismissError => {
                 self.error = None;
             }
-            ActiveConnectionsInput::WifiCardHovered(hovered) => {
-                self.wifi.hovered = hovered;
+            ActiveConnectionsInput::CardHovered(hovered) => {
+                self.station.hovered = hovered;
             }
             ActiveConnectionsInput::ShowError { ssid, message } => {
                 // The list only routes genuine (non-auth) failures that left us
                 // disconnected, so accept it unconditionally. `has_wifi_error`
                 // gates display on `connection == Idle`, and a later connection
-                // change clears it (see `WifiChanged`), so a stale error can
+                // change clears it (see `StateChanged`), so a stale error can
                 // never resurface.
                 self.error = Some(ConnectionError { ssid, message });
             }
@@ -301,7 +301,7 @@ impl Component for ActiveConnections {
         _root: &Self::Root,
     ) {
         match msg {
-            ActiveConnectionsCmd::WifiChanged {
+            ActiveConnectionsCmd::StateChanged {
                 connection,
                 strength,
                 frequency,
@@ -312,17 +312,17 @@ impl Component for ActiveConnections {
                     self.error = None;
                 }
 
-                self.wifi.connection = connection;
-                self.wifi.strength = strength;
-                self.wifi.frequency = frequency;
+                self.station.connection = connection;
+                self.station.strength = strength;
+                self.station.frequency = frequency;
             }
             ActiveConnectionsCmd::StationDeviceChanged => {
                 if self.iwd.station.get().is_none() {
-                    self.wifi = WifiState::default();
+                    self.station = StationState::default();
                     self.error = None;
                 }
 
-                self.reset_wifi_watchers(&sender);
+                self.reset_station_watchers(&sender);
             }
             // No state to update — returning re-evaluates the `#[watch]` bindings,
             // so `effective_wifi_icon` re-reads the configured icons.

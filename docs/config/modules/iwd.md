@@ -32,11 +32,11 @@ and stays hidden, exactly like the `network` module without NetworkManager.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `wifi-disabled-icon` | string | `"network-wireless-disabled-symbolic"` | WiFi icon when disabled. |
-| `wifi-acquiring-icon` | string | `"network-wireless-acquiring-symbolic"` | WiFi icon when connecting. |
-| `wifi-offline-icon` | string | `"network-wireless-offline-symbolic"` | WiFi icon when disconnected. |
-| `wifi-connected-icon` | string | `"network-wireless-connected-symbolic"` | WiFi icon when connected but signal strength unavailable. |
-| `wifi-signal-icons` | array of string | `[...]` | WiFi signal strength icons from weak to excellent. |
+| `wifi-disabled-icon` | string | `"cm-wireless-disabled-symbolic"` | WiFi icon when disabled. |
+| `wifi-acquiring-icon` | string | `"cm-wireless-acquiring-symbolic"` | WiFi icon when connecting. |
+| `wifi-offline-icon` | string | `"cm-wireless-offline-symbolic"` | WiFi icon when disconnected. |
+| `wifi-connected-icon` | string | `"cm-wireless-connected-symbolic"` | WiFi icon when connected but signal strength unavailable. |
+| `wifi-signal-icons` | array of string | `[...]` | WiFi signal strength icons from weakest to strongest. |
 | `border-show` | bool | `false` | Display border around button. |
 | `icon-show` | bool | `true` | Display module icon. |
 | `label-show` | bool | `true` | Display connection label (the connected SSID). |
@@ -44,8 +44,10 @@ and stays hidden, exactly like the `network` module without NetworkManager.
 
 ::: details More about `wifi-signal-icons`
 
-The signal percentage maps to icons: 0-25% uses icons\[0\], 26-50% uses
-icons\[1\], etc.
+The list is ordered weakest-first: `icons[0]` is used for the weakest signal and
+the last entry for the strongest. The measured signal strength is bucketed and
+scaled across however many icons you provide, so any list length works — it is
+not a fixed percentage banding.
 
 :::
 
@@ -73,15 +75,16 @@ icons\[1\], etc.
 
 ```toml
 [modules.iwd]
-wifi-disabled-icon = "network-wireless-disabled-symbolic"
-wifi-acquiring-icon = "network-wireless-acquiring-symbolic"
-wifi-offline-icon = "network-wireless-offline-symbolic"
-wifi-connected-icon = "network-wireless-connected-symbolic"
+wifi-disabled-icon = "cm-wireless-disabled-symbolic"
+wifi-acquiring-icon = "cm-wireless-acquiring-symbolic"
+wifi-offline-icon = "cm-wireless-offline-symbolic"
+wifi-connected-icon = "cm-wireless-connected-symbolic"
 wifi-signal-icons = [
-    "network-wireless-signal-weak-symbolic",
-    "network-wireless-signal-ok-symbolic",
-    "network-wireless-signal-good-symbolic",
-    "network-wireless-signal-excellent-symbolic",
+    "cm-wireless-signal-none-symbolic",
+    "cm-wireless-signal-weak-symbolic",
+    "cm-wireless-signal-ok-symbolic",
+    "cm-wireless-signal-good-symbolic",
+    "cm-wireless-signal-excellent-symbolic",
 ]
 border-show = false
 border-color = "accent"

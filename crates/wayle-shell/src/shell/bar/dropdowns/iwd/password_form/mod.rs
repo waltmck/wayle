@@ -178,6 +178,10 @@ impl SimpleComponent for PasswordForm {
                 let _ = sender.output(PasswordFormOutput::Cancel);
                 self.visible = false;
             }
+            PasswordFormInput::Hide => {
+                self.reset_entry();
+                self.visible = false;
+            }
             PasswordFormInput::SetSignalIcon(signal_icon) => {
                 self.signal_icon = signal_icon;
             }

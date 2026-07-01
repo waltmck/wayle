@@ -129,6 +129,7 @@ impl AvailableNetworks {
         if !available {
             self.state = ListState::Normal;
             self.clear_selection();
+            self.password_form.emit(PasswordFormInput::Hide);
         }
 
         self.rebuild_network_list();
@@ -145,6 +146,7 @@ impl AvailableNetworks {
         self.network_list.guard().clear();
         self.state = ListState::Normal;
         self.clear_selection();
+        self.password_form.emit(PasswordFormInput::Hide);
     }
 
     /// The SSID currently shown as the Active Connection, and therefore excluded

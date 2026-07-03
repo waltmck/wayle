@@ -3,6 +3,7 @@
 This is a fork of Wayle for testing my experimental changes prior to upstreaming. It currently includes
 - An IWD module for controling WiFi without NetworkManager
 - A rewritten systray module that fixes several race conditions.
+- A fix that makes the `netstat` module work correctly without NetworkManager.
 
 Please feel free to test these changes and report any issues so that I can fix them before upstreaming.
 

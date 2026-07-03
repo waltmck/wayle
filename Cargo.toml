@@ -152,8 +152,10 @@ codegen-units = 1
 wayle-systray = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 wayle-core    = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 wayle-traits  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
+wayle-iwd  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 
 # Build against local wayle-services checkout (uncomment to use):
 # wayle-systray = { path = "/home/waltmck/src/wayle-services/wayle-systray" }
 # wayle-core    = { path = "/home/waltmck/src/wayle-services/wayle-core" }
 # wayle-traits  = { path = "/home/waltmck/src/wayle-services/wayle-traits" }
+# wayle-iwd  = { path = "/home/waltmck/src/wayle-services/wayle-iwd" }

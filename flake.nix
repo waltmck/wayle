@@ -53,7 +53,7 @@
         #       "wayle-core-0.1.2"    = lib.fakeHash;  # rev c0ccb44…
         #     };
         #   };
-        cargoHash = "sha256-4C+5sxFg3a6PxvcBbqHnrYoNe6oaoy/dWUlhYjBSwrg=";
+        cargoHash = "sha256-P+Xne5+mNaDrpdelxjuxob3tXVvlbkyOewGfZEwz9xU=";
 
         nativeBuildInputs = with pkgs; [
           pkg-config

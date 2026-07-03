@@ -4776,7 +4776,8 @@ dependencies = [
 
 [[package]]
 name = "wayle-iwd"
-version = "0.6.0"
+version = "0.1.0"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#f5995b26ef9b6c54aaa62e7ae369b7fe3e38f06b"
 dependencies = [
  "derive_more",
  "futures",
@@ -5059,7 +5060,7 @@ dependencies = [
 [[package]]
 name = "wayle-traits"
 version = "0.1.2"
-source = "git+https://github.com/waltmck/wayle-services?branch=master#b7ef7f625906eeb158dc8a9d9abebd315668c878"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#f5995b26ef9b6c54aaa62e7ae369b7fe3e38f06b"
 
 [[package]]
 name = "wayle-wallpaper"

@@ -1,9 +1,10 @@
 # waltmck/wayle
 
 This is a fork of Wayle for testing my experimental changes prior to upstreaming. It currently includes
-- An IWD module for controling WiFi without NetworkManager
+- An IWD module for controling WiFi without NetworkManager.
 - A rewritten systray module that fixes several race conditions.
 - A fix that makes the `netstat` module work correctly without NetworkManager.
+- Use absolute paths for `/bin/sh` to fix certain functionality when run from a systemd service.
 
 Please feel free to test these changes and report any issues so that I can fix them before upstreaming.
 

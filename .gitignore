@@ -6,3 +6,7 @@ wayle-shell.ftl
 # Temporary sandboxes
 Wayle
 sandbox/
+
+# devenv
+.devenv/
+.direnv/

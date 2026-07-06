@@ -107,7 +107,7 @@ wayle-mango = "0.1.1"
 wayle-niri = "0.1.0"
 wayle-media = "0.1.2"
 wayle-network = "0.1.2"
-wayle-notification = "0.1.3"
+wayle-notification = "0.1.4"
 wayle-power-profiles = "0.1.3"
 wayle-sysinfo = "0.1.2"
 wayle-systray = "0.1.3"
@@ -153,6 +153,7 @@ wayle-systray = { git = "https://github.com/waltmck/wayle-services", branch = "m
 wayle-core    = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 wayle-traits  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 wayle-iwd  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
+wayle-notification  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 
 # Build against local wayle-services checkout (uncomment to use):
 # wayle-systray = { path = "/home/waltmck/src/wayle-services/wayle-systray" }

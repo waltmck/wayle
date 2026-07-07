@@ -6,7 +6,9 @@ use wayle_notification::core::types::Action;
 use super::NotificationPopupCard;
 use crate::{
     i18n::t,
-    shell::notification_popup::helpers::{RelativeTime, ResolvedIcon, urgency_bar_visible},
+    shell::notification_popup::helpers::{
+        RelativeTime, ResolvedIcon, resolve_icon, urgency_bar_visible, urgency_css_class,
+    },
 };
 
 impl NotificationPopupCard {
@@ -26,6 +28,11 @@ impl NotificationPopupCard {
     }
 
     pub(super) fn apply_icon(&self, icon: &gtk::Image, icon_container: &gtk::Box) {
+        // Reset first so reactive re-application doesn't accumulate the file-icon class
+        // or leave a stale image when the source changes.
+        icon.clear();
+        icon_container.remove_css_class("file-icon");
+
         match &self.resolved_icon {
             ResolvedIcon::Named(name) => {
                 icon.set_icon_name(Some(name));
@@ -60,6 +67,11 @@ impl NotificationPopupCard {
     }
 
     pub(super) fn setup_action_buttons(&self, actions_box: &gtk::Box) {
+        // Clear existing rows so this is idempotent on reactive refresh.
+        while let Some(child) = actions_box.first_child() {
+            actions_box.remove(&child);
+        }
+
         let actions = self.notification.actions.get();
         let visible_actions: Vec<_> = actions
             .iter()
@@ -70,6 +82,7 @@ impl NotificationPopupCard {
             actions_box.set_visible(false);
             return;
         }
+        actions_box.set_visible(true);
 
         const MAX_PER_ROW: usize = 3;
 
@@ -118,10 +131,11 @@ impl NotificationPopupCard {
         button
     }
 
-    pub(super) fn setup_default_action(&self, root: &gtk::Box) {
+    pub(super) fn setup_default_action(&self, root: &gtk::Box) -> Option<gtk::GestureClick> {
         let default_action = self.notification.default_action.get();
         if default_action.is_none() {
-            return;
+            root.set_cursor_from_name(None);
+            return None;
         }
 
         root.set_cursor_from_name(Some("pointer"));
@@ -145,7 +159,55 @@ impl NotificationPopupCard {
                 }
             });
         });
-        root.add_controller(click);
+        root.add_controller(click.clone());
+        Some(click)
+    }
+
+    pub(super) fn apply_urgency_class(&self, root: &gtk::Box) {
+        // Idempotent: drop any previously-applied urgency class before adding current.
+        for class in ["low", "normal", "critical"] {
+            root.remove_css_class(class);
+        }
+        root.add_css_class(urgency_css_class(self.notification.urgency.get()));
+    }
+
+    /// Re-renders the card in place from the current notification state (icon, app
+    /// label, action buttons, urgency, default-click gesture). Summary/body labels
+    /// refresh declaratively via `#[watch]`.
+    pub(super) fn refresh_notification(&mut self, root: &gtk::Box) {
+        self.resolved_icon = resolve_icon(
+            self.icon_source,
+            &self.notification.app_name.get(),
+            &self.notification.app_icon.get(),
+            &self.notification.image_path.get(),
+            &self.notification.desktop_entry.get(),
+        );
+        self.app_label = self
+            .notification
+            .app_name
+            .get()
+            .unwrap_or_else(|| t!("notification-popup-unknown-app"));
+
+        if let (Some(icon), Some(container)) = (self.icon.clone(), self.icon_container.clone()) {
+            self.apply_icon(&icon, &container);
+        }
+        if let Some(actions_box) = self.actions_box.clone() {
+            self.setup_action_buttons(&actions_box);
+        }
+
+        self.apply_urgency_class(root);
+        if urgency_bar_visible(self.notification.urgency.get(), self.urgency_bar) {
+            root.add_css_class("urgency-bar");
+        } else {
+            root.remove_css_class("urgency-bar");
+        }
+
+        if let Some(gesture) = self.default_gesture.take() {
+            root.remove_controller(&gesture);
+        }
+        root.set_cursor_from_name(None);
+        let gesture = self.setup_default_action(root);
+        self.default_gesture = gesture;
     }
 
     pub(super) fn setup_hover_controller(&self, root: &gtk::Box) {

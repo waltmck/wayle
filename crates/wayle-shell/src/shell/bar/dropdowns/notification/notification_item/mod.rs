@@ -1,22 +1,32 @@
 pub(crate) mod messages;
 mod methods;
+mod watchers;
 
 use std::sync::Arc;
 
 use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
+use tokio_util::sync::CancellationToken;
+use wayle_config::schemas::modules::notification::IconSource;
 use wayle_notification::core::notification::Notification;
 
 use self::messages::{NotificationItemInit, NotificationItemInput, NotificationItemOutput};
-use crate::shell::notification_popup::helpers::{
-    ResolvedIcon, relative_time, sanitize_markup, urgency_css_class,
-};
+use crate::shell::notification_popup::helpers::{ResolvedIcon, relative_time, sanitize_markup};
 
 pub(crate) struct NotificationItem {
     pub(crate) notification: Arc<Notification>,
 
     resolved_icon: ResolvedIcon,
+    icon_source: IconSource,
     time_label: String,
+
+    root: Option<gtk::Box>,
+    main_row: Option<gtk::Box>,
+    actions_box: Option<gtk::Box>,
+    icon: Option<gtk::Image>,
+    icon_container: Option<gtk::Box>,
+    default_gesture: Option<gtk::GestureClick>,
+    cancel_token: CancellationToken,
 }
 
 #[relm4::factory(pub(crate))]
@@ -31,7 +41,6 @@ impl FactoryComponent for NotificationItem {
         #[root]
         gtk::Box {
             add_css_class: "notification-dropdown-item",
-            add_css_class: urgency_css_class(self.notification.urgency.get()),
             set_orientation: gtk::Orientation::Vertical,
 
             #[name = "main_row"]
@@ -64,6 +73,7 @@ impl FactoryComponent for NotificationItem {
                             set_hexpand: true,
                             set_halign: gtk::Align::Start,
                             set_ellipsize: gtk::pango::EllipsizeMode::End,
+                            #[watch]
                             set_label: &self.notification.summary.get(),
                         },
 
@@ -89,12 +99,14 @@ impl FactoryComponent for NotificationItem {
                         set_lines: 2,
                         set_wrap: true,
                         set_wrap_mode: gtk::pango::WrapMode::WordChar,
+                        #[watch]
                         set_label: &self
                             .notification
                             .body
                             .get()
                             .as_deref()
                             .map_or_else(String::new, sanitize_markup),
+                        #[watch]
                         set_visible: self.notification.body.get().is_some(),
                     },
                 },
@@ -114,7 +126,15 @@ impl FactoryComponent for NotificationItem {
         Self {
             notification: init.notification,
             resolved_icon: init.resolved_icon,
+            icon_source: init.icon_source,
             time_label,
+            root: None,
+            main_row: None,
+            actions_box: None,
+            icon: None,
+            icon_container: None,
+            default_gesture: None,
+            cancel_token: CancellationToken::new(),
         }
     }
 
@@ -129,6 +149,7 @@ impl FactoryComponent for NotificationItem {
 
         self.apply_icon(&widgets.icon, &widgets.icon_container);
         self.build_action_buttons(&widgets.actions_box);
+        self.apply_urgency(&root);
 
         let id = self.notification.id;
         let output_sender = sender.output_sender().clone();
@@ -137,7 +158,16 @@ impl FactoryComponent for NotificationItem {
             output_sender.emit(NotificationItemOutput::Dismissed(id));
         });
 
-        self.setup_default_action(&widgets.main_row);
+        let gesture = self.setup_default_action(&widgets.main_row);
+        self.default_gesture = gesture;
+
+        self.root = Some(root.clone());
+        self.main_row = Some(widgets.main_row.clone());
+        self.actions_box = Some(widgets.actions_box.clone());
+        self.icon = Some(widgets.icon.clone());
+        self.icon_container = Some(widgets.icon_container.clone());
+
+        watchers::spawn_field_watcher(&sender, &self.notification, self.cancel_token.clone());
 
         widgets
     }
@@ -148,6 +178,15 @@ impl FactoryComponent for NotificationItem {
                 self.time_label =
                     Self::time_to_string(relative_time(&self.notification.timestamp.get()));
             }
+            NotificationItemInput::Refresh => {
+                self.refresh_widgets();
+            }
         }
+    }
+}
+
+impl Drop for NotificationItem {
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
     }
 }

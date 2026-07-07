@@ -137,5 +137,6 @@ fn build_item_init(
     NotificationItemInit {
         notification: notification.clone(),
         resolved_icon,
+        icon_source,
     }
 }

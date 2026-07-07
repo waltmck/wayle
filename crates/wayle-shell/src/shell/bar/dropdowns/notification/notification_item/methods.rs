@@ -5,13 +5,20 @@ use wayle_notification::core::types::Action;
 use super::NotificationItem;
 use crate::{
     i18n::t,
-    shell::notification_popup::helpers::{RelativeTime, ResolvedIcon},
+    shell::notification_popup::helpers::{
+        RelativeTime, ResolvedIcon, resolve_icon, urgency_css_class,
+    },
 };
 
 const MAX_ACTIONS_PER_ROW: usize = 3;
 
 impl NotificationItem {
     pub(super) fn apply_icon(&self, icon: &gtk::Image, icon_container: &gtk::Box) {
+        // Reset first so repeated calls (reactive refresh) don't accumulate state or
+        // leave a stale image when the source changes (e.g. Named -> File).
+        icon.clear();
+        icon_container.remove_css_class("file-icon");
+
         match &self.resolved_icon {
             ResolvedIcon::Named(name) => {
                 icon.set_icon_name(Some(name));
@@ -28,6 +35,11 @@ impl NotificationItem {
     }
 
     pub(super) fn build_action_buttons(&self, actions_box: &gtk::Box) {
+        // Clear existing rows so this is idempotent on reactive refresh.
+        while let Some(child) = actions_box.first_child() {
+            actions_box.remove(&child);
+        }
+
         let actions = self.notification.actions.get();
         let visible_actions: Vec<_> = actions
             .iter()
@@ -38,6 +50,7 @@ impl NotificationItem {
             actions_box.set_visible(false);
             return;
         }
+        actions_box.set_visible(true);
 
         for chunk in visible_actions.chunks(MAX_ACTIONS_PER_ROW) {
             let row = self.build_action_row(chunk);
@@ -81,9 +94,10 @@ impl NotificationItem {
         button
     }
 
-    pub(super) fn setup_default_action(&self, main_row: &gtk::Box) {
+    pub(super) fn setup_default_action(&self, main_row: &gtk::Box) -> Option<gtk::GestureClick> {
         if self.notification.default_action.get().is_none() {
-            return;
+            main_row.set_cursor_from_name(None);
+            return None;
         }
 
         main_row.set_cursor_from_name(Some("pointer"));
@@ -103,7 +117,49 @@ impl NotificationItem {
             });
         });
 
-        main_row.add_controller(click);
+        main_row.add_controller(click.clone());
+        Some(click)
+    }
+
+    pub(super) fn apply_urgency(&self, root: &gtk::Box) {
+        // Idempotent: drop any previously-applied urgency class before adding current.
+        for class in ["low", "normal", "critical"] {
+            root.remove_css_class(class);
+        }
+        root.add_css_class(urgency_css_class(self.notification.urgency.get()));
+    }
+
+    /// Re-renders the imperative parts of the item in place from the current
+    /// notification state (icon, action buttons, urgency, default-click gesture).
+    /// Declarative fields (summary/body/time) refresh via `#[watch]`.
+    pub(super) fn refresh_widgets(&mut self) {
+        self.resolved_icon = resolve_icon(
+            self.icon_source,
+            &self.notification.app_name.get(),
+            &self.notification.app_icon.get(),
+            &self.notification.image_path.get(),
+            &self.notification.desktop_entry.get(),
+        );
+
+        if let (Some(icon), Some(container)) = (self.icon.clone(), self.icon_container.clone()) {
+            self.apply_icon(&icon, &container);
+        }
+
+        if let Some(actions_box) = self.actions_box.clone() {
+            self.build_action_buttons(&actions_box);
+        }
+
+        if let Some(root) = self.root.clone() {
+            self.apply_urgency(&root);
+        }
+
+        if let Some(main_row) = self.main_row.clone() {
+            if let Some(gesture) = self.default_gesture.take() {
+                main_row.remove_controller(&gesture);
+            }
+            let gesture = self.setup_default_action(&main_row);
+            self.default_gesture = gesture;
+        }
     }
 
     pub(crate) fn time_to_string(time: RelativeTime) -> String {

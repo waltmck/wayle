@@ -14,7 +14,6 @@ use wayle_notification::{NotificationService, core::notification::Notification};
 use super::{
     helpers::{
         ResolvedIcon, relative_time, resolve_icon, sanitize_markup, urgency_bar_visible,
-        urgency_css_class,
     },
     templates::NotificationContentTemplate,
 };
@@ -39,6 +38,8 @@ pub(crate) enum CardCmd {
         shadow: bool,
         urgency_bar: UrgencyBarThreshold,
     },
+    /// The underlying notification's content/actions changed; re-render in place.
+    NotificationChanged,
 }
 
 /// A single notification popup card.
@@ -50,6 +51,12 @@ pub(crate) struct NotificationPopupCard {
     resolved_icon: ResolvedIcon,
     app_label: String,
     time_label: String,
+    icon_source: IconSource,
+    urgency_bar: UrgencyBarThreshold,
+    icon: Option<gtk::Image>,
+    icon_container: Option<gtk::Box>,
+    actions_box: Option<gtk::Box>,
+    default_gesture: Option<gtk::GestureClick>,
 }
 
 #[relm4::component(pub(crate))]
@@ -63,7 +70,6 @@ impl Component for NotificationPopupCard {
         #[root]
         gtk::Box {
             add_css_class: "notification-popup-card",
-            add_css_class: urgency_css_class(model.notification.urgency.get()),
             set_orientation: gtk::Orientation::Vertical,
 
             gtk::Box {
@@ -88,6 +94,7 @@ impl Component for NotificationPopupCard {
                 NotificationContentTemplate {
                     #[template_child]
                     app_label {
+                        #[watch]
                         set_label: &model.app_label,
                     },
                     #[template_child]
@@ -96,16 +103,19 @@ impl Component for NotificationPopupCard {
                     },
                     #[template_child]
                     title {
+                        #[watch]
                         set_label: &model.notification.summary.get(),
                     },
                     #[template_child]
                     body {
+                        #[watch]
                         set_label: &model
                             .notification
                             .body
                             .get()
                             .as_deref()
                             .map_or_else(String::new, sanitize_markup),
+                        #[watch]
                         set_visible: model.notification.body.get().is_some(),
                     },
                 },
@@ -159,7 +169,7 @@ impl Component for NotificationPopupCard {
 
         let time_label = Self::format_time_label(relative_time(&notif.timestamp.get()));
 
-        let model = Self {
+        let mut model = Self {
             notification: init.notification,
             service: init.service,
             hover_pause: init.hover_pause,
@@ -167,17 +177,30 @@ impl Component for NotificationPopupCard {
             resolved_icon,
             app_label,
             time_label,
+            icon_source: init.icon_source,
+            urgency_bar: init.urgency_bar,
+            icon: None,
+            icon_container: None,
+            actions_box: None,
+            default_gesture: None,
         };
 
         let widgets = view_output!();
 
         model.apply_css_classes(&root, init.shadow, init.urgency_bar);
+        model.apply_urgency_class(&root);
         model.apply_icon(&widgets.icon, &widgets.icon_container);
         model.setup_action_buttons(&widgets.actions_box);
-        model.setup_default_action(&root);
+        let default_gesture = model.setup_default_action(&root);
+        model.default_gesture = default_gesture;
         model.setup_hover_controller(&root);
 
+        model.icon = Some(widgets.icon.clone());
+        model.icon_container = Some(widgets.icon_container.clone());
+        model.actions_box = Some(widgets.actions_box.clone());
+
         watchers::spawn(&sender, &init.config);
+        watchers::spawn_notification(&sender, &model.notification);
 
         ComponentParts { model, widgets }
     }
@@ -188,6 +211,8 @@ impl Component for NotificationPopupCard {
                 shadow,
                 urgency_bar,
             } => {
+                self.urgency_bar = urgency_bar;
+
                 if shadow {
                     root.add_css_class("shadow");
                 } else {
@@ -199,6 +224,9 @@ impl Component for NotificationPopupCard {
                 } else {
                     root.remove_css_class("urgency-bar");
                 }
+            }
+            CardCmd::NotificationChanged => {
+                self.refresh_notification(root);
             }
         }
     }

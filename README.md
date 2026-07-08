@@ -13,12 +13,12 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
   - Make batch dismissals ("dismiss all") do atomic database writes and atomic re-renders for drastic performance improvement with many notifications.
   - Minimize widget churn on adding/removing notifications
   - Deduplicate icon images in memory
+- Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup. [#323](https://github.com/wayle-rs/wayle/pull/323)
 
 Roadmap:
 - Add option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (for both notification group icons and workspaces icons).
 - Fix large systray dropdown menus [#285](https://github.com/wayle-rs/wayle/issues/285)
 - Squash bugs in Media module's mpris2 controls [#156](https://github.com/wayle-rs/wayle/issues/156)
-- Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup.
 - Implement modules:
   - Mullvad (status, connect, disconnect, select relay). Daemon is controllable over dbus interface.
   - Syncthing (sync status, etc.)

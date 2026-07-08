@@ -6,11 +6,13 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
 - A fix that makes the `netstat` module work correctly without NetworkManager. [#316](https://github.com/wayle-rs/wayle/pull/316)
 - Use absolute paths for `/bin/sh` to fix certain functionality when run from a systemd service. [#316](https://github.com/wayle-rs/wayle/pull/317)
 - [WIP] Allow passing a config file location with `-c` or `--config`, enabling a declarative Nix-based module without home-manager. [#318](https://github.com/wayle-rs/wayle/pull/318)
-- Generally much more robust notification service [#321](https://github.com/wayle-rs/wayle/pull/321) [#38](https://github.com/wayle-rs/wayle-services/pull/36):
+- Generally much more robust notification service, that works more efficiently with a large number of notifications [#321](https://github.com/wayle-rs/wayle/pull/321) [#38](https://github.com/wayle-rs/wayle-services/pull/36):
   - Direct dbus actions to the notification owner's bus name to work around broken apps (matching GNOME and dunst)
   - Remove non-functional action buttons from orphaned FDO notifications
   - Add support for the `org.gtk.Notifications` backend, which allows notification actions to persist app restarts (only for apps that support `org.gtk.Notifications`, in practice GTK/GApplications).
   - Make batch dismissals ("dismiss all") do atomic database writes and atomic re-renders for drastic performance improvement with many notifications.
+  - Minimize widget churn on adding/removing notifications
+  - Deduplicate icon images in memory
 
 Roadmap:
 - Add option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (for both notification group icons and workspaces icons).

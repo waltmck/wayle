@@ -18,6 +18,7 @@ pub(crate) struct NotificationItem {
 
     resolved_icon: ResolvedIcon,
     icon_source: IconSource,
+    symbolic_fallback: bool,
     time_label: String,
 
     root: Option<gtk::Box>,
@@ -127,6 +128,7 @@ impl FactoryComponent for NotificationItem {
             notification: init.notification,
             resolved_icon: init.resolved_icon,
             icon_source: init.icon_source,
+            symbolic_fallback: init.symbolic_fallback,
             time_label,
             root: None,
             main_row: None,

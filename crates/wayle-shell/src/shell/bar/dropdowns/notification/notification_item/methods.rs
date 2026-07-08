@@ -145,6 +145,7 @@ impl NotificationItem {
             &self.notification.app_icon.get(),
             &self.notification.image_path.get(),
             &self.notification.desktop_entry.get(),
+            self.symbolic_fallback,
         );
 
         if let (Some(icon), Some(container)) = (self.icon.clone(), self.icon_container.clone()) {

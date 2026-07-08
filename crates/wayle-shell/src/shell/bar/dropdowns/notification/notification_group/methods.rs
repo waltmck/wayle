@@ -44,7 +44,9 @@ impl NotificationGroup {
 
         let inits: Vec<_> = remaining
             .iter()
-            .map(|notification| build_item_init(self.icon_source, notification))
+            .map(|notification| {
+                build_item_init(self.icon_source, self.symbolic_fallback, notification)
+            })
             .collect();
 
         {
@@ -59,6 +61,7 @@ impl NotificationGroup {
 
     pub(super) fn resolve_group_icon(
         _icon_source: IconSource,
+        symbolic_fallback: bool,
         notifications: &[Arc<Notification>],
     ) -> Option<String> {
         let first = notifications.first()?;
@@ -68,6 +71,7 @@ impl NotificationGroup {
             &first.app_icon.get(),
             &first.image_path.get(),
             &first.desktop_entry.get(),
+            symbolic_fallback,
         );
 
         match resolved {
@@ -112,6 +116,7 @@ impl NotificationGroup {
         // watchers rather than being destroyed and rebuilt.
         let new_id_set: HashSet<u32> = new_ids.iter().copied().collect();
         let icon_source = self.icon_source;
+        let symbolic_fallback = self.symbolic_fallback;
         let mut guard = self.items.guard();
 
         for idx in (0..guard.len()).rev() {
@@ -136,7 +141,10 @@ impl NotificationGroup {
                     guard.move_to(idx, target_idx);
                 }
                 None => {
-                    guard.insert(target_idx, build_item_init(icon_source, notification));
+                    guard.insert(
+                        target_idx,
+                        build_item_init(icon_source, symbolic_fallback, notification),
+                    );
                 }
             }
         }
@@ -145,6 +153,7 @@ impl NotificationGroup {
 
 fn build_item_init(
     icon_source: IconSource,
+    symbolic_fallback: bool,
     notification: &Arc<Notification>,
 ) -> NotificationItemInit {
     let resolved_icon = resolve_icon(
@@ -153,11 +162,13 @@ fn build_item_init(
         &notification.app_icon.get(),
         &notification.image_path.get(),
         &notification.desktop_entry.get(),
+        symbolic_fallback,
     );
 
     NotificationItemInit {
         notification: notification.clone(),
         resolved_icon,
         icon_source,
+        symbolic_fallback,
     }
 }

@@ -188,6 +188,7 @@ impl NotificationPopupCard {
             &self.notification.app_icon.get(),
             &self.notification.image_path.get(),
             &self.notification.desktop_entry.get(),
+            self.symbolic_fallback,
         );
         self.app_label = self
             .notification

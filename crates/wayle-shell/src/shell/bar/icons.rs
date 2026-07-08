@@ -3,9 +3,11 @@
 //! Patterns use glob syntax and match case-insensitively.
 //! Order matters - first match wins.
 
-use std::sync::OnceLock;
+use std::{cell::RefCell, collections::HashMap, sync::OnceLock};
 
 use glob::Pattern;
+use gtk4::{gdk, gio::prelude::AppInfoExt, glib::prelude::Cast as _, prelude::IconExt};
+use wayle_widgets::icons::icon_exists;
 
 struct CompiledEntry {
     pattern: Pattern,
@@ -273,4 +275,77 @@ pub(crate) fn lookup_app_icon(name: &str) -> Option<&'static str> {
         .iter()
         .find(|entry| entry.pattern.matches(&name_lower))
         .map(|entry| entry.icon)
+}
+
+thread_local! {
+    /// Caches `identifier -> symbolic icon name` resolutions. App→icon mappings
+    /// are stable, so this avoids repeated desktop-database and theme lookups on
+    /// every redraw. `None` (no symbolic variant) is cached too.
+    static SYMBOLIC_DESKTOP_CACHE: RefCell<HashMap<String, Option<String>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Resolves the `-symbolic` variant of an app's desktop-entry icon.
+///
+/// `identifier` is a desktop-entry id or window class (e.g. `org.gnome.Calendar`
+/// or `firefox`). Returns the symbolic icon name only if such a variant exists
+/// in the current icon theme — never a full-colour icon — so callers fall
+/// through to their own generic fallback otherwise. No-op (returns `None`) when
+/// there is no GDK display, so it is safe to call off-screen (e.g. in tests).
+pub(crate) fn symbolic_desktop_icon(identifier: &str) -> Option<String> {
+    if identifier.is_empty() {
+        return None;
+    }
+
+    SYMBOLIC_DESKTOP_CACHE.with(|cache| {
+        if let Some(cached) = cache.borrow().get(identifier) {
+            return cached.clone();
+        }
+        let resolved = resolve_symbolic_desktop_icon(identifier);
+        cache
+            .borrow_mut()
+            .insert(identifier.to_owned(), resolved.clone());
+        resolved
+    })
+}
+
+fn resolve_symbolic_desktop_icon(identifier: &str) -> Option<String> {
+    // Icon-theme lookups require a GDK display; bail out (rather than panic in
+    // `icon_exists`) when there isn't one.
+    gdk::Display::default()?;
+
+    let icon: String = lookup_desktop_entry(identifier)?.icon()?.to_string()?.into();
+    let base = icon.strip_suffix("-symbolic").unwrap_or(&icon);
+    let symbolic = format!("{base}-symbolic");
+
+    icon_exists(&symbolic).then_some(symbolic)
+}
+
+fn lookup_desktop_entry(identifier: &str) -> Option<gio_unix::DesktopAppInfo> {
+    let candidates = [
+        format!("{identifier}.desktop"),
+        format!("{}.desktop", identifier.to_lowercase()),
+    ];
+    for desktop_id in &candidates {
+        if let Some(app) = gio_unix::DesktopAppInfo::new(desktop_id) {
+            return Some(app);
+        }
+    }
+
+    find_by_startup_wm_class(identifier)
+}
+
+fn find_by_startup_wm_class(wm_class: &str) -> Option<gio_unix::DesktopAppInfo> {
+    let wm_class_lower = wm_class.to_lowercase();
+    for app_info in gtk4::gio::AppInfo::all() {
+        let Ok(desktop_app) = app_info.downcast::<gio_unix::DesktopAppInfo>() else {
+            continue;
+        };
+        if let Some(startup_class) = desktop_app.startup_wm_class()
+            && startup_class.to_lowercase() == wm_class_lower
+        {
+            return Some(desktop_app);
+        }
+    }
+    None
 }

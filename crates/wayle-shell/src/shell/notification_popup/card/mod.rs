@@ -52,6 +52,7 @@ pub(crate) struct NotificationPopupCard {
     app_label: String,
     time_label: String,
     icon_source: IconSource,
+    symbolic_fallback: bool,
     urgency_bar: UrgencyBarThreshold,
     icon: Option<gtk::Image>,
     icon_container: Option<gtk::Box>,
@@ -154,12 +155,14 @@ impl Component for NotificationPopupCard {
     ) -> ComponentParts<Self> {
         let notif = &init.notification;
 
+        let symbolic_fallback = init.config.config().general.symbolic_icon_fallback.get();
         let resolved_icon = resolve_icon(
             init.icon_source,
             &notif.app_name.get(),
             &notif.app_icon.get(),
             &notif.image_path.get(),
             &notif.desktop_entry.get(),
+            symbolic_fallback,
         );
 
         let app_label = notif
@@ -178,6 +181,7 @@ impl Component for NotificationPopupCard {
             app_label,
             time_label,
             icon_source: init.icon_source,
+            symbolic_fallback,
             urgency_bar: init.urgency_bar,
             icon: None,
             icon_container: None,

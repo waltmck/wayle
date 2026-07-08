@@ -29,6 +29,16 @@ pub struct GeneralConfig {
     #[serde(rename = "tearing-mode")]
     #[default(false)]
     pub tearing_mode: ConfigProperty<bool>,
+
+    /// Fall back to an app's symbolic desktop-entry icon when no icon is mapped.
+    ///
+    /// Applies to modules that render per-app icons (notifications, workspaces).
+    /// When enabled and an app matches no hardcoded icon mapping, its desktop
+    /// entry's icon is used if a `-symbolic` variant exists in the icon theme;
+    /// otherwise the module's usual fallback icon is used, as before.
+    #[serde(rename = "symbolic-icon-fallback")]
+    #[default(false)]
+    pub symbolic_icon_fallback: ConfigProperty<bool>,
 }
 
 impl ModuleInfoProvider for GeneralConfig {

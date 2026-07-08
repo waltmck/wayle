@@ -10,6 +10,7 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
   - Direct dbus actions to the notification owner's bus name to work around broken apps (matching GNOME and dunst)
   - Remove non-functional action buttons from orphaned FDO notifications
   - Add support for the `org.gtk.Notifications` backend, which allows notification actions to persist app restarts (only for apps that support `org.gtk.Notifications`, in practice GTK/GApplications).
+  - Make batch dismissals ("dismiss all") do atomic database writes and atomic re-renders for drastic performance improvement with many notifications.
 
 Roadmap:
 - Add option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (for both notification group icons and workspaces icons).

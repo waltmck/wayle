@@ -14,9 +14,9 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
   - Minimize widget churn on adding/removing notifications
   - Deduplicate icon images in memory
 - Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup. [#323](https://github.com/wayle-rs/wayle/pull/323)
+- Add `general.symbolic-icon-fallback` option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (applies to notification and workspace modules). [#325](https://github.com/wayle-rs/wayle/pull/325)
 
 Roadmap:
-- Add option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (for both notification group icons and workspaces icons).
 - Fix large systray dropdown menus [#285](https://github.com/wayle-rs/wayle/issues/285)
 - Squash bugs in Media module's mpris2 controls [#156](https://github.com/wayle-rs/wayle/issues/156)
 - Implement modules:

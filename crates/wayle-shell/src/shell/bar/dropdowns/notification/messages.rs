@@ -12,6 +12,7 @@ pub(crate) struct NotificationDropdownInit {
 pub(crate) enum NotificationDropdownMsg {
     DndToggled(bool),
     ClearAll,
+    ClearGroup(Vec<u32>),
     NotificationDismissed,
 }
 

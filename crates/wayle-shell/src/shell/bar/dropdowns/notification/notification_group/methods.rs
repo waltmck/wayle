@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use wayle_config::schemas::modules::notification::IconSource;
 use wayle_notification::core::notification::Notification;
@@ -106,17 +106,38 @@ impl NotificationGroup {
             return;
         }
 
-        let inits: Vec<_> = visible
-            .iter()
-            .map(|notification| build_item_init(self.icon_source, notification))
-            .collect();
+        // Reconcile the factory in place within a single guard scope (one render): drop
+        // items that are no longer visible, then move/insert so each slot matches
+        // `visible`. Items whose id persists keep their existing widget and reactive
+        // watchers rather than being destroyed and rebuilt.
+        let new_id_set: HashSet<u32> = new_ids.iter().copied().collect();
+        let icon_source = self.icon_source;
+        let mut guard = self.items.guard();
 
-        {
-            let mut guard = self.items.guard();
-            guard.clear();
+        for idx in (0..guard.len()).rev() {
+            let still_visible = guard
+                .get(idx)
+                .is_some_and(|item| new_id_set.contains(&item.notification.id));
+            if !still_visible {
+                guard.remove(idx);
+            }
+        }
 
-            for init in inits {
-                guard.push_back(init);
+        for (target_idx, notification) in visible.iter().enumerate() {
+            let existing = (target_idx..guard.len()).find(|&idx| {
+                guard
+                    .get(idx)
+                    .is_some_and(|item| item.notification.id == notification.id)
+            });
+
+            match existing {
+                Some(idx) if idx == target_idx => {}
+                Some(idx) => {
+                    guard.move_to(idx, target_idx);
+                }
+                None => {
+                    guard.insert(target_idx, build_item_init(icon_source, notification));
+                }
             }
         }
     }

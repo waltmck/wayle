@@ -64,10 +64,15 @@ fn spawn_icon_source_watcher(
     config: &Arc<ConfigService>,
 ) {
     let icon_source = config.config().modules.notifications.icon_source.clone();
+    let symbolic_fallback = config.config().general.symbolic_icon_fallback.clone();
 
-    watch!(sender, [icon_source.watch()], |out| {
-        let _ = out.send(NotificationDropdownCmd::IconSourceChanged);
-    });
+    watch!(
+        sender,
+        [icon_source.watch(), symbolic_fallback.watch()],
+        |out| {
+            let _ = out.send(NotificationDropdownCmd::IconSourceChanged);
+        }
+    );
 }
 
 fn spawn_scale_watcher(

@@ -144,12 +144,14 @@ impl Component for NotificationPopupCard {
     ) -> ComponentParts<Self> {
         let notif = &init.notification;
 
+        let symbolic_fallback = init.config.config().general.symbolic_icon_fallback.get();
         let resolved_icon = resolve_icon(
             init.icon_source,
             &notif.app_name.get(),
             &notif.app_icon.get(),
             &notif.image_path.get(),
             &notif.desktop_entry.get(),
+            symbolic_fallback,
         );
 
         let app_label = notif

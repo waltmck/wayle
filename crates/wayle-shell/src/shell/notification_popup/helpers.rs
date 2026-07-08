@@ -3,7 +3,7 @@ use relm4::gtk::{glib, pango};
 use wayle_config::schemas::modules::notification::{IconSource, UrgencyBarThreshold};
 use wayle_notification::types::Urgency;
 
-use crate::shell::bar::icons::lookup_app_icon;
+use crate::shell::bar::icons::{lookup_app_icon, symbolic_desktop_icon};
 
 const FALLBACK_ICON: &str = "ld-bell-symbolic";
 const MINUTES_PER_HOUR: i64 = 60;
@@ -77,16 +77,17 @@ pub(crate) fn resolve_icon(
     app_icon: &Option<String>,
     image_path: &Option<String>,
     desktop_entry: &Option<String>,
+    symbolic_fallback: bool,
 ) -> ResolvedIcon {
     match icon_source {
-        IconSource::Mapped => mapped_icon(app_name),
+        IconSource::Mapped => mapped_icon(app_name, desktop_entry, symbolic_fallback),
 
         IconSource::Automatic => {
             if let Some(resolved) = try_icon_string(image_path) {
                 return resolved;
             }
 
-            mapped_icon(app_name)
+            mapped_icon(app_name, desktop_entry, symbolic_fallback)
         }
 
         IconSource::Application => {
@@ -104,7 +105,7 @@ pub(crate) fn resolve_icon(
                 return ResolvedIcon::Named(entry.clone());
             }
 
-            mapped_icon(app_name)
+            mapped_icon(app_name, desktop_entry, symbolic_fallback)
         }
     }
 }
@@ -122,13 +123,26 @@ fn try_icon_string(value: &Option<String>) -> Option<ResolvedIcon> {
     }
 }
 
-fn mapped_icon(app_name: &Option<String>) -> ResolvedIcon {
-    let name = app_name
-        .as_deref()
-        .and_then(lookup_app_icon)
-        .unwrap_or(FALLBACK_ICON);
+fn mapped_icon(
+    app_name: &Option<String>,
+    desktop_entry: &Option<String>,
+    symbolic_fallback: bool,
+) -> ResolvedIcon {
+    if let Some(name) = app_name.as_deref().and_then(lookup_app_icon) {
+        return ResolvedIcon::Named(String::from(name));
+    }
 
-    ResolvedIcon::Named(String::from(name))
+    if symbolic_fallback
+        && let Some(id) = desktop_entry
+            .as_deref()
+            .filter(|entry| !entry.is_empty())
+            .or(app_name.as_deref())
+        && let Some(symbolic) = symbolic_desktop_icon(id)
+    {
+        return ResolvedIcon::Named(symbolic);
+    }
+
+    ResolvedIcon::Named(String::from(FALLBACK_ICON))
 }
 
 #[cfg(test)]

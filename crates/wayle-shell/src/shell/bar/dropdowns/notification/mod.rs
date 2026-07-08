@@ -181,6 +181,9 @@ impl Component for NotificationDropdown {
                 NotificationGroupOutput::Dismissed => {
                     NotificationDropdownMsg::NotificationDismissed
                 }
+                NotificationGroupOutput::ClearRequested(ids) => {
+                    NotificationDropdownMsg::ClearGroup(ids)
+                }
             });
 
         let mut model = Self {
@@ -210,10 +213,18 @@ impl Component for NotificationDropdown {
             }
 
             NotificationDropdownMsg::ClearAll => {
-                let notifications = self.notification.notifications.get();
-                for notification in &notifications {
-                    notification.dismiss();
-                }
+                let ids = self
+                    .notification
+                    .notifications
+                    .get()
+                    .iter()
+                    .map(|notification| notification.id)
+                    .collect();
+                self.notification.dismiss_many(ids);
+            }
+
+            NotificationDropdownMsg::ClearGroup(ids) => {
+                self.notification.dismiss_many(ids);
             }
 
             NotificationDropdownMsg::NotificationDismissed => {}

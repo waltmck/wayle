@@ -22,4 +22,7 @@ pub(crate) enum NotificationGroupInput {
 #[derive(Debug)]
 pub(crate) enum NotificationGroupOutput {
     Dismissed,
+    /// Requests the parent (which owns the service) to clear these notifications as a
+    /// single batch.
+    ClearRequested(Vec<u32>),
 }

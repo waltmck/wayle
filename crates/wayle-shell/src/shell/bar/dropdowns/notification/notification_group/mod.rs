@@ -253,10 +253,14 @@ impl FactoryComponent for NotificationGroup {
             }
 
             NotificationGroupInput::ClearGroup => {
-                for notification in &self.notifications {
-                    notification.dismiss();
-                }
-                sender.output(NotificationGroupOutput::Dismissed).ok();
+                let ids = self
+                    .notifications
+                    .iter()
+                    .map(|notification| notification.id)
+                    .collect();
+                sender
+                    .output(NotificationGroupOutput::ClearRequested(ids))
+                    .ok();
             }
 
             NotificationGroupInput::ItemDismissed(id) => {

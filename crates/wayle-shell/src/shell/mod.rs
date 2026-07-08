@@ -114,11 +114,6 @@ impl Component for Shell {
         };
         let widgets = view_output!();
 
-        // Bootstrap-level readiness barrier: every shell module has now been
-        // constructed, so report `READY=1` to the service manager exactly
-        // once. No-op unless launched as a `Type=notify` systemd unit.
-        crate::systemd::notify_ready();
-
         ComponentParts { model, widgets }
     }
 

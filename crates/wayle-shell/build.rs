@@ -20,19 +20,6 @@ fn main() {
     println!("cargo:rustc-link-lib=gtk4-layer-shell");
     println!("cargo:rustc-link-lib=wayland-client");
 
-    // rustc links with `--as-needed`, so the `wayland-client` above can be
-    // dropped when it appears before any object/rlib that references it — the
-    // link then fails on `wl_proxy_get_version` from a later rlib (e.g.
-    // wayle-idle-inhibit). Whether it's dropped depends on link ordering, which
-    // shifts as dependencies change, making the link fragile. Re-link it once
-    // more at the very end under `--no-as-needed` so it is always retained,
-    // regardless of ordering. (`--push-state`/`--pop-state` keep the override
-    // scoped to just this library.) This applies to wayle-shell's own binaries
-    // and tests; the `wayle` binary keeps working via the propagated link above.
-    println!("cargo:rustc-link-arg=-Wl,--push-state,--no-as-needed");
-    println!("cargo:rustc-link-arg=-lwayland-client");
-    println!("cargo:rustc-link-arg=-Wl,--pop-state");
-
     let locales_dir = Path::new("locales");
 
     for entry in fs::read_dir(locales_dir).expect("locales/ directory must exist") {

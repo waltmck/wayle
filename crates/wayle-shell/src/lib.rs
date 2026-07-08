@@ -13,7 +13,6 @@ mod process;
 mod services;
 mod shell;
 mod startup;
-mod systemd;
 mod template;
 mod tracing_init;
 mod wallpaper_map;

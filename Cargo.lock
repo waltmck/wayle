@@ -4684,7 +4684,7 @@ dependencies = [
 [[package]]
 name = "wayle-core"
 version = "0.1.2"
-source = "git+https://github.com/waltmck/wayle-services?branch=master#9f800cd63de154518678d0e05e883c88333b9c47"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#d893e93202a5ebdef8e18111dc41ded655065dd6"
 dependencies = [
  "futures",
  "schemars",
@@ -4777,7 +4777,7 @@ dependencies = [
 [[package]]
 name = "wayle-iwd"
 version = "0.1.0"
-source = "git+https://github.com/waltmck/wayle-services?branch=master#9f800cd63de154518678d0e05e883c88333b9c47"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#d893e93202a5ebdef8e18111dc41ded655065dd6"
 dependencies = [
  "derive_more",
  "futures",
@@ -4877,7 +4877,7 @@ dependencies = [
 [[package]]
 name = "wayle-notification"
 version = "0.1.4"
-source = "git+https://github.com/waltmck/wayle-services?branch=master#9f800cd63de154518678d0e05e883c88333b9c47"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#d893e93202a5ebdef8e18111dc41ded655065dd6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5036,7 +5036,7 @@ dependencies = [
 [[package]]
 name = "wayle-systray"
 version = "0.1.4"
-source = "git+https://github.com/waltmck/wayle-services?branch=master#9f800cd63de154518678d0e05e883c88333b9c47"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#d893e93202a5ebdef8e18111dc41ded655065dd6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -5059,7 +5059,7 @@ dependencies = [
 [[package]]
 name = "wayle-traits"
 version = "0.1.2"
-source = "git+https://github.com/waltmck/wayle-services?branch=master#9f800cd63de154518678d0e05e883c88333b9c47"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#d893e93202a5ebdef8e18111dc41ded655065dd6"
 
 [[package]]
 name = "wayle-wallpaper"

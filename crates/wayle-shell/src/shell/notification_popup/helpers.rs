@@ -1,5 +1,7 @@
+use std::{cell::RefCell, collections::HashMap};
+
 use chrono::{DateTime, Utc};
-use relm4::gtk::{glib, pango};
+use relm4::gtk::{gdk, glib, glib::prelude::ObjectExt, pango};
 use wayle_config::schemas::modules::notification::{IconSource, UrgencyBarThreshold};
 use wayle_notification::types::Urgency;
 
@@ -129,6 +131,35 @@ fn mapped_icon(app_name: &Option<String>) -> ResolvedIcon {
         .unwrap_or(FALLBACK_ICON);
 
     ResolvedIcon::Named(String::from(name))
+}
+
+thread_local! {
+    /// Main-thread cache of notification image textures, keyed by file path and holding
+    /// only weak references. Many notifications rendering the same (content-addressed)
+    /// image file share one reference-counted [`gdk::Texture`] — a single copy of the
+    /// pixels in memory — and it's freed once no widget references it, then reloaded on
+    /// demand. Themed (`Named`) icons don't need this; GTK's `IconTheme` already shares
+    /// them.
+    static TEXTURE_CACHE: RefCell<HashMap<String, glib::WeakRef<gdk::Texture>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Returns a shared [`gdk::Texture`] for the image at `path`, loading it at most once
+/// while it is in use so notifications sharing an image don't each hold their own copy.
+/// Returns `None` if the file can't be decoded.
+pub(crate) fn cached_texture(path: &str) -> Option<gdk::Texture> {
+    TEXTURE_CACHE.with(|cache| {
+        let existing = cache.borrow().get(path).and_then(|weak| weak.upgrade());
+        if let Some(texture) = existing {
+            return Some(texture);
+        }
+
+        let texture = gdk::Texture::from_filename(path).ok()?;
+        cache
+            .borrow_mut()
+            .insert(path.to_owned(), texture.downgrade());
+        Some(texture)
+    })
 }
 
 #[cfg(test)]

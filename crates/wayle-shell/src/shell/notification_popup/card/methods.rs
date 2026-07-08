@@ -7,7 +7,8 @@ use super::NotificationPopupCard;
 use crate::{
     i18n::t,
     shell::notification_popup::helpers::{
-        RelativeTime, ResolvedIcon, resolve_icon, urgency_bar_visible, urgency_css_class,
+        RelativeTime, ResolvedIcon, cached_texture, resolve_icon, urgency_bar_visible,
+        urgency_css_class,
     },
 };
 
@@ -42,7 +43,13 @@ impl NotificationPopupCard {
             }
 
             ResolvedIcon::File(path) => {
-                icon.set_from_file(Some(path));
+                // Share one reference-counted texture across every notification using this
+                // image instead of loading a separate copy per widget; fall back to a
+                // direct load if the file can't be decoded into a texture.
+                match cached_texture(path) {
+                    Some(texture) => icon.set_paintable(Some(&texture)),
+                    None => icon.set_from_file(Some(path)),
+                }
                 icon_container.add_css_class("file-icon");
             }
         }

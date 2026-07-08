@@ -15,6 +15,7 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
   - Deduplicate icon images in memory
 - Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup. [#323](https://github.com/wayle-rs/wayle/pull/323)
 - Add `general.symbolic-icon-fallback` option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (applies to notification and workspace modules). [#325](https://github.com/wayle-rs/wayle/pull/325)
+- Pointer cursor on hover over workspace buttons, matching other clickable elements in the shell. [326](https://github.com/wayle-rs/wayle/pull/326)
 
 Roadmap:
 - Fix large systray dropdown menus [#285](https://github.com/wayle-rs/wayle/issues/285)
@@ -27,7 +28,6 @@ Roadmap:
   - mpd (play, pause, select song/album from music library)
 - UI annoyances:
   - `dropdown-autohide = true` breaks focus when module is closed on Hyprland. Need to investigate to see whose fault it is and possibly work around Hyprland's behavior (seems possible since this doesn't happen with other shells).
-  - Hyprland Workspaces should change the cursor to a pointer, as do other clickable elements in the shell.
 
 Please feel free to test these changes and report any issues so that I can fix them before upstreaming.
 

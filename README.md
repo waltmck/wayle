@@ -1,6 +1,7 @@
 # waltmck/wayle
 
 This is a fork of Wayle for testing my experimental changes prior to upstreaming. Currently outstanding PRs included in this branch:
+- Fix buggy link-time ordering that randomly breaks builds. [#324](https://github.com/wayle-rs/wayle/pull/324)
 - An IWD module for controling WiFi without NetworkManager. [#300](https://github.com/wayle-rs/wayle/pull/300) [#35](https://github.com/wayle-rs/wayle-services/pull/35)
 - A rewritten systray module that fixes several race conditions. [#34](https://github.com/wayle-rs/wayle-services/pull/34)
 - A fix that makes the `netstat` module work correctly without NetworkManager. [#316](https://github.com/wayle-rs/wayle/pull/316)
@@ -13,9 +14,10 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
   - Make batch dismissals ("dismiss all") do atomic database writes and atomic re-renders for drastic performance improvement with many notifications.
   - Minimize widget churn on adding/removing notifications
   - Deduplicate icon images in memory
+  - Fix bug that made notification hints silently fail to load from the database on startup.
 - Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup. [#323](https://github.com/wayle-rs/wayle/pull/323)
 - Add `general.symbolic-icon-fallback` option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (applies to notification and workspace modules). [#325](https://github.com/wayle-rs/wayle/pull/325)
-- Pointer cursor on hover over workspace buttons, matching other clickable elements in the shell. [326](https://github.com/wayle-rs/wayle/pull/326)
+- Pointer cursor on hover over workspace buttons, matching other clickable elements in the shell. [#326](https://github.com/wayle-rs/wayle/pull/326)
 
 Roadmap:
 - Fix large systray dropdown menus [#285](https://github.com/wayle-rs/wayle/issues/285)

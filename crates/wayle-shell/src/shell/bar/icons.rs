@@ -3,10 +3,15 @@
 //! Patterns use glob syntax and match case-insensitively.
 //! Order matters - first match wins.
 
-use std::{cell::RefCell, collections::HashMap, sync::OnceLock};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use glob::Pattern;
-use gtk4::{gdk, gio::prelude::AppInfoExt, glib::prelude::Cast as _, prelude::IconExt};
+use gtk4::{gdk, glib};
 use wayle_widgets::icons::icon_exists;
 
 struct CompiledEntry {
@@ -279,7 +284,7 @@ pub(crate) fn lookup_app_icon(name: &str) -> Option<&'static str> {
 
 thread_local! {
     /// Caches `identifier -> symbolic icon name` resolutions. App→icon mappings
-    /// are stable, so this avoids repeated desktop-database and theme lookups on
+    /// are stable, so this avoids repeated desktop-file and theme lookups on
     /// every redraw. `None` (no symbolic variant) is cached too.
     static SYMBOLIC_DESKTOP_CACHE: RefCell<HashMap<String, Option<String>>> =
         RefCell::new(HashMap::new());
@@ -314,37 +319,91 @@ fn resolve_symbolic_desktop_icon(identifier: &str) -> Option<String> {
     // `icon_exists`) when there isn't one.
     gdk::Display::default()?;
 
-    let icon: String = lookup_desktop_entry(identifier)?.icon()?.to_string()?.into();
+    let icon = desktop_entry_icon(identifier)?;
     let base = icon.strip_suffix("-symbolic").unwrap_or(&icon);
     let symbolic = format!("{base}-symbolic");
 
     icon_exists(&symbolic).then_some(symbolic)
 }
 
-fn lookup_desktop_entry(identifier: &str) -> Option<gio_unix::DesktopAppInfo> {
-    let candidates = [
+/// Reads the `Icon=` value from an app's desktop entry — by desktop id first,
+/// then by matching `StartupWMClass`.
+///
+/// Reads the `.desktop` files directly (via `glib::KeyFile`) instead of going
+/// through `gio::DesktopAppInfo` / `AppInfo::all()`, which silently drop any app
+/// whose `Exec` program is not found in `$PATH`. That filtering would otherwise
+/// hide an app's icon whenever Wayle runs with a restricted `$PATH` (e.g. as a
+/// systemd user service whose unit sets a minimal `PATH`) even though the icon is
+/// installed — an app's icon does not depend on its binary being runnable.
+fn desktop_entry_icon(identifier: &str) -> Option<String> {
+    let ids = [
         format!("{identifier}.desktop"),
         format!("{}.desktop", identifier.to_lowercase()),
     ];
-    for desktop_id in &candidates {
-        if let Some(app) = gio_unix::DesktopAppInfo::new(desktop_id) {
-            return Some(app);
+    let dirs = application_dirs();
+
+    for id in &ids {
+        for dir in &dirs {
+            if let Some(icon) = read_desktop_icon(&dir.join(id)) {
+                return Some(icon);
+            }
         }
     }
 
-    find_by_startup_wm_class(identifier)
+    icon_by_startup_wm_class(&dirs, identifier)
 }
 
-fn find_by_startup_wm_class(wm_class: &str) -> Option<gio_unix::DesktopAppInfo> {
+/// The `applications` subdirectory of every XDG data directory
+/// (`$XDG_DATA_HOME` then each entry of `$XDG_DATA_DIRS`).
+fn application_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![glib::user_data_dir()];
+    dirs.extend(glib::system_data_dirs());
+    dirs.into_iter()
+        .map(|dir| dir.join("applications"))
+        .collect()
+}
+
+/// Reads `[Desktop Entry] Icon=` from a `.desktop` file, if present and non-empty.
+fn read_desktop_icon(path: &Path) -> Option<String> {
+    let keyfile = glib::KeyFile::new();
+    keyfile.load_from_file(path, glib::KeyFileFlags::NONE).ok()?;
+    desktop_icon_key(&keyfile)
+}
+
+fn desktop_icon_key(keyfile: &glib::KeyFile) -> Option<String> {
+    keyfile
+        .string("Desktop Entry", "Icon")
+        .ok()
+        .map(|icon| icon.to_string())
+        .filter(|icon| !icon.is_empty())
+}
+
+/// Scans `.desktop` files for one whose `StartupWMClass` matches `wm_class`
+/// (case-insensitively) and returns its `Icon=`.
+fn icon_by_startup_wm_class(dirs: &[PathBuf], wm_class: &str) -> Option<String> {
     let wm_class_lower = wm_class.to_lowercase();
-    for app_info in gtk4::gio::AppInfo::all() {
-        let Ok(desktop_app) = app_info.downcast::<gio_unix::DesktopAppInfo>() else {
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
         };
-        if let Some(startup_class) = desktop_app.startup_wm_class()
-            && startup_class.to_lowercase() == wm_class_lower
-        {
-            return Some(desktop_app);
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("desktop") {
+                continue;
+            }
+            let keyfile = glib::KeyFile::new();
+            if keyfile.load_from_file(&path, glib::KeyFileFlags::NONE).is_err() {
+                continue;
+            }
+            let matches = keyfile
+                .string("Desktop Entry", "StartupWMClass")
+                .ok()
+                .is_some_and(|class| class.to_lowercase() == wm_class_lower);
+            if matches
+                && let Some(icon) = desktop_icon_key(&keyfile)
+            {
+                return Some(icon);
+            }
         }
     }
     None

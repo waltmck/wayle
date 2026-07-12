@@ -18,9 +18,13 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
 - Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup. [#323](https://github.com/wayle-rs/wayle/pull/323)
 - Add `general.symbolic-icon-fallback` option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (applies to notification and workspace modules). [#325](https://github.com/wayle-rs/wayle/pull/325)
 - Pointer cursor on hover over workspace buttons, matching other clickable elements in the shell. [#326](https://github.com/wayle-rs/wayle/pull/326)
+- Redesigned dropover UI: switched from autohide popovers to a full-screen transparent scrim, similar to Astal/AGS and eww. [#328](https://github.com/wayle-rs/wayle/pull/328)
+  - Fixes [#62](https://github.com/wayle-rs/wayle/issues/62) and [#285](https://github.com/wayle-rs/wayle/issues/285)
+  - Fully scrollable and arrow key navigable systray dropdows.
+  - Allows switching between dropdown menus with a single click, rather than having to click twice (one to close the existing menu and one to open the next one).
+  - The bar and dropdown will stay on top of full-screen apps when there is a dropdown open, laying the groundwork for future work on reliable CLI dispatchers to open dropdown menus.
 
 Roadmap:
-- Fix large systray dropdown menus [#285](https://github.com/wayle-rs/wayle/issues/285)
 - Squash bugs in Media module's mpris2 controls [#156](https://github.com/wayle-rs/wayle/issues/156)
 - Implement modules:
   - Mullvad (status, connect, disconnect, select relay). Daemon is controllable over dbus interface.
@@ -28,8 +32,6 @@ Roadmap:
   - systemd-networkd (exposes dbus API to get/set status of managed interfaces). Need to think about how this can/should interface with Network module
   - ZFS (pool status, dataset usage, health)
   - mpd (play, pause, select song/album from music library)
-- UI annoyances:
-  - `dropdown-autohide = true` breaks focus when module is closed on Hyprland. Need to investigate to see whose fault it is and possibly work around Hyprland's behavior (seems possible since this doesn't happen with other shells).
 
 Please feel free to test these changes and report any issues so that I can fix them before upstreaming.
 

@@ -20,6 +20,30 @@ use crate::{
     Config, ExtractRuntimeValues, infrastructure::themes::utils::load_themes,
 };
 
+/// Config keys removed in a past release, as `(dotted-path, note)`. A stale value
+/// left in a user's config does nothing, but silently ignoring it is confusing —
+/// warn at load so the user knows to delete it. (Renamed — not removed — keys use
+/// the derive's `#[wayle(deprecated_alias)]` instead, which still applies them.)
+const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
+    "bar.dropdown-autohide",
+    "dropdowns now always dismiss on outside click",
+)];
+
+/// Warn about any removed config keys still present in the loaded config.
+fn warn_removed_keys(config_toml: &toml::Value) {
+    for (path, note) in REMOVED_CONFIG_KEYS {
+        if toml_lookup(config_toml, path).is_some() {
+            warn!(key = %path, "removed config key has no effect ({note}); delete it");
+        }
+    }
+}
+
+/// Navigate a dotted `path` (e.g. `bar.dropdown-autohide`) into a TOML table tree.
+fn toml_lookup<'a>(value: &'a toml::Value, path: &str) -> Option<&'a toml::Value> {
+    path.split('.')
+        .try_fold(value, |current, segment| current.as_table()?.get(segment))
+}
+
 /// Reactive configuration service.
 ///
 /// Each config field can be watched independently for changes. Runtime
@@ -56,7 +80,10 @@ impl ConfigService {
                 .map_err(|source| Error::TaskJoin { source })?;
 
         match config_result {
-            Ok(config_toml) => config.apply_config_layer(&config_toml, ""),
+            Ok(config_toml) => {
+                warn_removed_keys(&config_toml);
+                config.apply_config_layer(&config_toml, "");
+            }
             Err(e) => warn!("using defaults, config.toml failed:\n{e}"),
         }
 

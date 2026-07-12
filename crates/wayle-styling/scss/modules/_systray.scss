@@ -45,8 +45,10 @@
     @include popover-base;
     font-family: var(--font-sans);
 
+    // Each cascade column is its own popover, so its `contents` is naturally a
+    // floating card (background/border/shadow from `popover-base`); no per-column
+    // card styling or transparency tricks are needed.
     > contents {
-        @include popover-contents;
         min-width: calc(12rem * var(--global-scale));
         padding: var(--space-xs);
 
@@ -148,12 +150,14 @@
     border-radius: var(--rounding-element);
     transition: background var(--duration-fast);
 
-    &:hover {
+    // Highlight via background only. The old rule set the label to
+    // `--fg-on-accent` (near-black, meant for light accent fills) over a dark
+    // hover bg, and — via the descendant combinator — leaked into the submenu
+    // popover parented onto this button, blackening every row there too.
+    // `.selected` is the keyboard/hover cursor, kept visually identical to hover.
+    &:hover,
+    &.selected {
         background: var(--bg-overlay);
-
-        .systray-menu-item {
-            color: var(--fg-on-accent);
-        }
     }
 
     &:active {
@@ -199,6 +203,19 @@
     -gtk-icon-size: var(--icon-sm);
     margin-right: var(--space-sm);
     color: inherit;
+}
+
+.systray-menu-item-indicator {
+    -gtk-icon-size: var(--icon-sm);
+    min-width: var(--icon-sm);
+    margin-right: var(--space-sm);
+    color: var(--accent);
+}
+
+// The scrolled list inside a column popover. The popover's `contents` paints
+// the card, so the scroller itself is transparent.
+.systray-menu-column {
+    background: transparent;
 }
 
 .systray-menu-item-label {

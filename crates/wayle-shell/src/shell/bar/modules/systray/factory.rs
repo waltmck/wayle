@@ -18,7 +18,7 @@ impl ModuleFactory for Factory {
     fn create(
         settings: &BarSettings,
         services: &ShellServices,
-        _dropdowns: &Rc<DropdownRegistry>,
+        dropdowns: &Rc<DropdownRegistry>,
         class: Option<String>,
     ) -> Option<ModuleInstance> {
         let systray = require_service("systray", "systray", services.systray.clone())?;
@@ -27,6 +27,7 @@ impl ModuleFactory for Factory {
             is_vertical: settings.is_vertical.clone(),
             systray,
             config: services.config.clone(),
+            coordinator: dropdowns.coordinator(),
         };
         let controller = dynamic_controller(SystrayModule::builder().launch(init).detach());
         Some(ModuleInstance { controller, class })

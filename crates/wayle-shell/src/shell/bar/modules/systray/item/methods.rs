@@ -1,18 +1,17 @@
+use std::{cell::Cell, rc::Rc};
+
 #[allow(deprecated)]
 use gtk4::prelude::StyleContextExt;
-use gtk4::{gdk, gio, glib::idle_add_local_once};
+use gtk4::gdk;
 use relm4::{
     gtk::{self, prelude::*},
     prelude::*,
 };
 use tracing::debug;
-use wayle_systray::{
-    adapters::gtk4::{Adapter, TrayMenuModel},
-    types::Coordinates,
-};
+use wayle_systray::types::Coordinates;
 
 use super::{
-    SystrayItem, SystrayItemMsg,
+    SystrayItem, SystrayItemMsg, menu,
     helpers::{create_texture_from_pixmap, load_icon_from_theme_path, select_best_pixmap},
 };
 use crate::shell::{
@@ -21,11 +20,18 @@ use crate::shell::{
 
 impl SystrayItem {
     pub(super) fn request_menu_show(&self, sender: &FactorySender<Self>) {
-        if let Some(popover) = self.popover.as_ref()
-            && popover.is_visible()
+        if let Some(menu) = self.menu.as_ref()
+            && menu.is_visible()
         {
-            debug!(item_id = %self.item.id.get(), "hiding popover");
-            popover.popdown();
+            debug!(item_id = %self.item.id.get(), "hiding menu");
+            menu.dismiss();
+            return;
+        }
+
+        // Coalesce rapid re-clicks: while the async refresh below is in flight a
+        // second click would spawn a second `ShowMenu` that flaps the menu closed.
+        // Cleared when `ShowMenu` is handled (see `toggle_menu`).
+        if self.pending_show.replace(true) {
             return;
         }
 
@@ -42,18 +48,20 @@ impl SystrayItem {
     }
 
     pub(super) fn toggle_menu(&mut self) {
-        if let Some(popover) = self.popover.as_ref()
-            && popover.is_visible()
+        // The pending `ShowMenu` (if any) is now being handled.
+        self.pending_show.set(false);
+
+        if let Some(menu) = self.menu.as_ref()
+            && menu.is_visible()
         {
-            debug!(item_id = %self.item.id.get(), "hiding popover");
-            popover.popdown();
+            debug!(item_id = %self.item.id.get(), "hiding menu");
+            menu.dismiss();
             return;
         }
 
         self.show_menu();
     }
 
-    #[allow(clippy::cognitive_complexity)]
     fn show_menu(&mut self) {
         let item_id = self.item.id.get();
         debug!(item_id = %item_id, title = %self.item.title.get(), "show_menu called");
@@ -71,84 +79,56 @@ impl SystrayItem {
             return;
         }
 
-        let model = Adapter::build_model(&self.item);
-        debug!(
-            item_id = %item_id,
-            menu_n_items = model.menu.n_items(),
-            accelerators = model.accelerators.len(),
-            "built menu model"
-        );
+        let Some(parent) = self.button.clone() else {
+            debug!("no parent button, cannot show menu");
+            return;
+        };
 
-        let popover = self.ensure_popover(&model.menu);
-        self.apply_menu_model(&popover, model);
-        popover.popup();
-    }
-
-    pub(super) fn ensure_popover(&mut self, menu: &gio::Menu) -> gtk::PopoverMenu {
-        if let Some(popover) = self.popover.clone() {
-            return popover;
+        // Rebuild from scratch each time so the menu reflects the latest layout;
+        // tear down the previous cascade first so no popover is left parented.
+        // Teardown unparents without popdown, so release its coordinator/scrim
+        // registration explicitly.
+        self.clear_menu_registration();
+        if let Some(previous) = self.menu.take() {
+            previous.teardown();
         }
 
-        let popover = gtk::PopoverMenu::from_model_full(menu, gtk::PopoverMenuFlags::NESTED);
-        popover.add_css_class("systray-menu");
-        popover.set_has_arrow(false);
+        let menu = menu::build(&self.item, &root_menu, parent.upcast_ref());
+        let dismiss = menu.dismiss_handle();
+        let cleaned = Rc::new(Cell::new(false));
 
-        popover.connect_map(|popover| {
-            override_model_button_layout(popover.upcast_ref());
+        // `open` shows the scrim. Register the menu's key handler so nav keys
+        // forwarded from the bar/scrim (wherever keyboard focus is) drive the
+        // cascade, and the tray button as anchor so clicking it toggles rather than
+        // plain-dismisses.
+        let anchor = parent.upcast_ref::<gtk::Widget>().downgrade();
+        self.coordinator
+            .open(dismiss.clone(), Some(menu.key_handler()), Some(anchor));
+
+        menu.root_popover().connect_closed({
+            let coordinator = self.coordinator.clone();
+            let dismiss = dismiss.clone();
+            let cleaned = cleaned.clone();
+            move |_| {
+                if !cleaned.replace(true) {
+                    coordinator.notify_closed(&dismiss);
+                }
+            }
         });
 
-        if let Some(parent) = self.button.as_ref() {
-            popover.set_parent(parent);
-        }
-
-        self.popover = Some(popover.clone());
-        popover
+        self.menu_reg = Some((dismiss, cleaned));
+        menu.popup();
+        self.menu = Some(menu);
     }
 
-    pub(super) fn apply_menu_model(&mut self, popover: &gtk::PopoverMenu, model: TrayMenuModel) {
-        self.clear_accelerators();
-        popover.set_menu_model(Some(&model.menu));
-        popover.insert_action_group("app", Some(&model.actions));
-        self.register_accelerators(popover, &model.accelerators);
-        self.action_group = Some(model.actions);
-    }
-
-    fn register_accelerators(
-        &mut self,
-        popover: &gtk::PopoverMenu,
-        accelerators: &[(String, String)],
-    ) {
-        let Some(app) = popover
-            .root()
-            .and_then(|root| root.downcast::<gtk::Window>().ok())
-            .and_then(|window| window.application())
-        else {
-            return;
-        };
-
-        for (action_name, accel) in accelerators {
-            app.set_accels_for_action(action_name, &[accel.as_str()]);
-            self.registered_accels.push(action_name.clone());
-        }
-    }
-
-    pub(super) fn clear_accelerators(&mut self) {
-        let accels: Vec<String> = self.registered_accels.drain(..).collect();
-
-        let Some(popover) = self.popover.as_ref() else {
-            return;
-        };
-
-        let Some(app) = popover
-            .root()
-            .and_then(|root| root.downcast::<gtk::Window>().ok())
-            .and_then(|window| window.application())
-        else {
-            return;
-        };
-
-        for action_name in &accels {
-            app.set_accels_for_action(action_name, &[]);
+    /// Release the open menu's coordinator registration (which hides the scrim) if
+    /// the popover's `connect_closed` hasn't already done so. Needed because
+    /// `teardown` unparents without popping down, so `connect_closed` may not fire.
+    pub(super) fn clear_menu_registration(&mut self) {
+        if let Some((dismiss, cleaned)) = self.menu_reg.take()
+            && !cleaned.replace(true)
+        {
+            self.coordinator.notify_closed(&dismiss);
         }
     }
 
@@ -227,85 +207,15 @@ impl SystrayItem {
     }
 
     pub(super) fn rebuild_menu_if_visible(&mut self) {
-        let Some(popover) = self.popover.clone() else {
+        let Some(menu) = self.menu.as_ref() else {
             return;
         };
 
-        if !popover.is_visible() {
+        if !menu.is_visible() {
             return;
         }
 
-        let model = Adapter::build_model(&self.item);
-        self.apply_menu_model(&popover, model);
-
-        idle_add_local_once(move || override_model_button_layout(popover.upcast_ref()));
+        // Rebuild in place from the updated layout.
+        self.show_menu();
     }
-}
-
-/// GTK4's `GtkModelButton` hides icons when a label is present and reserves
-/// left margin for check/radio indicators via a shared size group, even on
-/// items that don't have one. This walks the popover tree and undoes both:
-/// icons with content get forced visible, and empty indicator boxes get hidden.
-fn override_model_button_layout(widget: &gtk::Widget) {
-    if widget.css_name() == "modelbutton" {
-        force_icon_visible(widget);
-        hide_empty_indicator_box(widget);
-        return;
-    }
-
-    let mut child = widget.first_child();
-    while let Some(current) = child {
-        override_model_button_layout(current.upcast_ref());
-        child = current.next_sibling();
-    }
-}
-
-/// GTK4 hides the icon on model buttons that have a label. If the icon
-/// actually has content (a theme icon, GIcon, or paintable), force it visible.
-fn force_icon_visible(button: &gtk::Widget) {
-    let mut child = button.first_child();
-
-    while let Some(current) = child {
-        if let Some(image) = current.downcast_ref::<gtk::Image>() {
-            let has_content = image.icon_name().is_some()
-                || image.gicon().is_some()
-                || image.paintable().is_some();
-
-            if has_content {
-                image.set_visible(true);
-            }
-        }
-
-        child = current.next_sibling();
-    }
-}
-
-/// Every model button has a `box` child that holds check/radio indicators.
-/// GTK puts all of these boxes in a shared size group so they align, which
-/// means items without indicators still reserve that space on the left.
-/// Hide the box when it's empty to reclaim the margin.
-fn hide_empty_indicator_box(button: &gtk::Widget) {
-    let mut child = button.first_child();
-
-    while let Some(current) = child {
-        if current.css_name() == "box" && !contains_toggle_indicator(&current) {
-            current.set_visible(false);
-        }
-
-        child = current.next_sibling();
-    }
-}
-
-fn contains_toggle_indicator(indicator_box: &gtk::Widget) -> bool {
-    let mut child = indicator_box.first_child();
-
-    while let Some(current) = child {
-        let name = current.css_name();
-        if name == "check" || name == "radio" {
-            return true;
-        }
-        child = current.next_sibling();
-    }
-
-    false
 }

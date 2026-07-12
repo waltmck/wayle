@@ -40,7 +40,6 @@ pub(crate) struct BarInit {
 pub(crate) enum BarCmd {
     LayoutLoaded(BarLayout),
     StyleChanged,
-    DropdownAutohideChanged(bool),
     ExclusiveChanged(bool),
     LayerChanged,
 }
@@ -153,12 +152,43 @@ impl Component for Bar {
             .add_provider(&css_provider, gtk::STYLE_PROVIDER_PRIORITY_USER);
 
         watchers::layout::spawn(&sender, &init.monitor, &init.services.config, &ipc_state);
-        watchers::dropdowns::spawn(&sender, &init.services.config);
         watchers::exclusive::spawn(&sender, &init.services.config);
         watchers::layer::spawn(&sender, &init.services.config);
 
-        let dropdowns = Rc::new(DropdownRegistry::new(&init.services));
+        let dropdowns = Rc::new(DropdownRegistry::new(&init.services, &init.monitor, &root));
         dropdowns.warm_all();
+
+        // Keyboard for open dropdowns/menus is handled where focus is: when the
+        // bar (or one of its popovers) holds keyboard focus, Escape closes the open
+        // surface and nav keys drive the systray menu's cascade. The scrim handles
+        // the same when the pointer is over the empty desktop; together they cover
+        // any pointer position. Capture phase so it wins before any widget.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed({
+            let coordinator = dropdowns.coordinator();
+            move |_, keyval, _, _| coordinator.handle_key_event(keyval)
+        });
+        root.add_controller(keys);
+
+        // A click anywhere on the bar (empty area, a workspace button, etc.)
+        // dismisses the open dropdown/menu — except a click on its own anchor
+        // button, which is left to that button's toggle/swap. Capture phase so it
+        // runs before the button's own handler (dismiss-then-open for a swap).
+        let click_dismiss = gtk::GestureClick::new();
+        click_dismiss.set_propagation_phase(gtk::PropagationPhase::Capture);
+        click_dismiss.connect_pressed({
+            let coordinator = dropdowns.coordinator();
+            let root = root.downgrade();
+            move |_, _, x, y| {
+                let Some(root) = root.upgrade() else {
+                    return;
+                };
+                let target = root.pick(x, y, gtk::PickFlags::DEFAULT);
+                coordinator.handle_bar_click(target.as_ref());
+            }
+        });
+        root.add_controller(click_dismiss);
 
         let mut model = Self {
             settings,
@@ -219,9 +249,6 @@ impl Component for Bar {
                     self.css_provider.load_from_string(&new_css);
                     self.last_css = new_css;
                 }
-            }
-            BarCmd::DropdownAutohideChanged(autohide) => {
-                self.dropdowns.set_all_autohide(autohide);
             }
             BarCmd::ExclusiveChanged(exclusive) => {
                 Self::apply_exclusive_zone(root, exclusive);

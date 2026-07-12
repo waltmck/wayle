@@ -1,10 +1,10 @@
 mod helpers;
+mod menu;
 mod methods;
 mod watchers;
 
-use std::sync::Arc;
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
-use gtk4::gio::SimpleActionGroup;
 use relm4::{
     gtk::{self, prelude::*},
     prelude::*,
@@ -14,9 +14,12 @@ use tracing::{debug, warn};
 use wayle_config::ConfigService;
 use wayle_systray::{core::item::TrayItem, types::Coordinates};
 
+use crate::shell::bar::dropdowns::{DismissFn, OpenSurfaceCoordinator};
+
 pub(super) struct SystrayItemInit {
     pub(super) item: Arc<TrayItem>,
     pub(super) config: Arc<ConfigService>,
+    pub(super) coordinator: Rc<OpenSurfaceCoordinator>,
 }
 
 pub(super) struct SystrayItem {
@@ -25,9 +28,15 @@ pub(super) struct SystrayItem {
     button: Option<gtk::Button>,
     icon: Option<gtk::Image>,
     icon_color_provider: Option<gtk::CssProvider>,
-    popover: Option<gtk::PopoverMenu>,
-    action_group: Option<SimpleActionGroup>,
-    registered_accels: Vec<String>,
+    menu: Option<menu::TrayMenu>,
+    coordinator: Rc<OpenSurfaceCoordinator>,
+    /// The open menu's dismiss closure and a "already cleaned up" guard, so the
+    /// coordinator registration is released exactly once (via either the popover's
+    /// `connect_closed` or an explicit teardown, never both).
+    menu_reg: Option<(DismissFn, Rc<Cell<bool>>)>,
+    /// Set while an async `AboutToShow` refresh is pending, so a second right-click
+    /// in that window doesn't spawn a second `ShowMenu` that flaps the menu closed.
+    pending_show: Cell<bool>,
     cancel_token: CancellationToken,
 }
 
@@ -75,9 +84,10 @@ impl FactoryComponent for SystrayItem {
             button: None,
             icon: None,
             icon_color_provider: None,
-            popover: None,
-            action_group: None,
-            registered_accels: Vec::new(),
+            menu: None,
+            coordinator: init.coordinator,
+            menu_reg: None,
+            pending_show: Cell::new(false),
             cancel_token: CancellationToken::new(),
         }
     }
@@ -191,9 +201,9 @@ impl FactoryComponent for SystrayItem {
 impl Drop for SystrayItem {
     fn drop(&mut self) {
         self.cancel_token.cancel();
-        self.clear_accelerators();
-        if let Some(popover) = self.popover.take() {
-            popover.unparent();
+        self.clear_menu_registration();
+        if let Some(menu) = self.menu.take() {
+            menu.teardown();
         }
     }
 }

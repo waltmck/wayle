@@ -6,7 +6,7 @@ mod methods;
 mod styling;
 mod watchers;
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use gtk4::prelude::{OrientableExt, WidgetExt};
 use item::SystrayItem;
@@ -20,6 +20,7 @@ pub(crate) use self::{
     factory::Factory,
     messages::{SystrayCmd, SystrayInit, SystrayMsg},
 };
+use crate::shell::bar::dropdowns::OpenSurfaceCoordinator;
 
 pub(crate) struct SystrayModule {
     container: Controller<BarContainer>,
@@ -27,6 +28,7 @@ pub(crate) struct SystrayModule {
     css_provider: gtk::CssProvider,
     visible: ConfigProperty<bool>,
     config: Arc<ConfigService>,
+    coordinator: Rc<OpenSurfaceCoordinator>,
 }
 
 #[relm4::component(pub(crate))]
@@ -96,6 +98,7 @@ impl Component for SystrayModule {
             css_provider,
             visible,
             config: init.config,
+            coordinator: init.coordinator,
         };
         let container = model.container.widget();
         let items_box = model.items.widget();

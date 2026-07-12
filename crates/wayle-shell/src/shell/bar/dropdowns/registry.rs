@@ -6,13 +6,21 @@ use std::{
 };
 
 use gtk::prelude::*;
-use gtk4_layer_shell::{KeyboardMode, LayerShell};
 use relm4::{gtk, prelude::*};
 use tracing::{debug, warn};
 use wayle_config::{ClickAction, schemas::bar::Location};
 use wayle_widgets::prelude::{BarButton, BarButtonInput};
 
+use super::coordinator::{DismissFn, OpenSurfaceCoordinator};
+use super::scrim::Scrim;
 use crate::{process, shell::services::ShellServices};
+
+/// Per-bar wiring attached to each dropdown after creation, so its open/close
+/// hooks can reach the shared dismissal coordinator (which owns the scrim).
+#[derive(Clone)]
+struct DropdownWiring {
+    coordinator: Rc<OpenSurfaceCoordinator>,
+}
 
 /// Returns `value` unchanged, logging at debug if it is `None`.
 ///
@@ -42,28 +50,36 @@ pub(crate) struct DropdownInstance {
     popover: gtk::Popover,
     _controller: Box<dyn Any>,
     thaw_target: Rc<Cell<Option<relm4::Sender<BarButtonInput>>>>,
+    /// Filled by `DropdownRegistry::get_or_create` after construction (the
+    /// factories that call `new` don't have the coordinator/scrim).
+    wiring: Rc<RefCell<Option<DropdownWiring>>>,
+    /// This dropdown's dismiss closure while it's the open surface, so
+    /// `connect_closed` can tell the coordinator it closed.
+    current_dismiss: Rc<RefCell<Option<DismissFn>>>,
 }
 
 impl DropdownInstance {
     pub(crate) fn new(popover: gtk::Popover, controller: Box<dyn Any>) -> Self {
         let thaw_target: Rc<Cell<Option<relm4::Sender<BarButtonInput>>>> = Rc::default();
+        let wiring: Rc<RefCell<Option<DropdownWiring>>> = Rc::default();
+        let current_dismiss: Rc<RefCell<Option<DismissFn>>> = Rc::default();
 
         popover.connect_map(|popover| {
             debug!(
                 width = popover.width(),
                 height = popover.height(),
-                autohide = popover.is_autohide(),
                 classes = ?popover.css_classes(),
                 "popover mapped"
             );
         });
 
         let thaw = thaw_target.clone();
+        let wiring_closed = wiring.clone();
+        let dismiss_closed = current_dismiss.clone();
         popover.connect_closed(move |popover| {
             debug!(
                 width = popover.width(),
                 height = popover.height(),
-                autohide = popover.is_autohide(),
                 classes = ?popover.css_classes(),
                 "popover closed"
             );
@@ -79,14 +95,48 @@ impl DropdownInstance {
                 parent.set_size_request(-1, -1);
             }
 
-            set_bar_keyboard_mode(popover, KeyboardMode::None);
+            // Clone the wiring out before calling into it so no borrow is held
+            // across GTK/coordinator calls that could re-enter. `notify_closed`
+            // also hides the scrim; Escape/keyboard are handled at the bar/scrim
+            // level, not per-popover.
+            let wiring = wiring_closed.borrow().clone();
+            if let (Some(wiring), Some(dismiss)) = (wiring, dismiss_closed.borrow_mut().take()) {
+                wiring.coordinator.notify_closed(&dismiss);
+            }
         });
 
         Self {
             popover,
             _controller: controller,
             thaw_target,
+            wiring,
+            current_dismiss,
         }
+    }
+
+    fn attach(&self, wiring: DropdownWiring) {
+        *self.wiring.borrow_mut() = Some(wiring);
+    }
+
+    /// Register this dropdown as the open surface (closing any other) and show the
+    /// scrim. Called right before `popup()`.
+    fn register_open(&self) {
+        let Some(wiring) = self.wiring.borrow().clone() else {
+            return;
+        };
+        let popover = self.popover.downgrade();
+        let dismiss: DismissFn = Rc::new(move || {
+            if let Some(popover) = popover.upgrade() {
+                popover.popdown();
+            }
+        });
+        *self.current_dismiss.borrow_mut() = Some(dismiss.clone());
+        // Dropdowns have no custom key handler — their own focused widgets handle
+        // keys; Escape is handled by the bar/scrim via `dismiss_current`. The
+        // anchor is the button the popover hangs off, so clicking it toggles/swaps
+        // rather than plain-dismisses. `open` shows the scrim.
+        let anchor = self.popover.parent().map(|widget| widget.downgrade());
+        wiring.coordinator.open(dismiss, None, anchor);
     }
 
     /// Toggles popover visibility for the given bar button.
@@ -99,14 +149,6 @@ impl DropdownInstance {
         let widget_ref = widget.upcast_ref::<gtk::Widget>();
         let visible = self.popover.is_visible();
         let same_parent = self.popover.parent().as_ref() == Some(widget_ref);
-
-        debug!(
-            visible,
-            same_parent,
-            has_parent = self.popover.parent().is_some(),
-            classes = ?self.popover.css_classes(),
-            "toggle_for"
-        );
 
         if visible && same_parent {
             self.popover.popdown();
@@ -143,13 +185,7 @@ impl DropdownInstance {
         self.apply_position();
         self.apply_margins(style.margins);
         self.apply_style(&style);
-        set_bar_keyboard_mode(&self.popover, KeyboardMode::OnDemand);
-        debug!(
-            classes = ?self.popover.css_classes(),
-            autohide = self.popover.is_autohide(),
-            parent_size = ?self.popover.parent().map(|p| (p.width(), p.height())),
-            "popup (widget path)"
-        );
+        self.register_open();
         self.popover.popup();
     }
 
@@ -191,19 +227,16 @@ impl DropdownInstance {
         self.apply_position();
         self.apply_margins(style.margins);
         self.apply_style(&style);
-        set_bar_keyboard_mode(&self.popover, KeyboardMode::OnDemand);
-        debug!(
-            classes = ?self.popover.css_classes(),
-            autohide = self.popover.is_autohide(),
-            parent_size = ?self.popover.parent().map(|p| (p.width(), p.height())),
-            "popup (button path)"
-        );
+        self.register_open();
         self.popover.popup();
     }
 
     fn apply_style(&self, style: &DropdownStyle) {
         self.popover.set_opacity(style.opacity);
-        self.popover.set_autohide(style.autohide);
+        // Never autohide: the Wayland popup grab freezes input and swallows the
+        // dismiss-click on Hyprland. Dismissal is handled by the coordinator +
+        // scrim instead (see `register_open`).
+        self.popover.set_autohide(false);
         if style.shadow_enabled {
             self.popover.add_css_class("shadow");
         } else {
@@ -282,7 +315,6 @@ struct DropdownStyle {
     margins: DropdownMargins,
     opacity: f64,
     shadow_enabled: bool,
-    autohide: bool,
     freeze_label: bool,
 }
 
@@ -355,21 +387,28 @@ pub(crate) trait DropdownFactory {
 pub(crate) struct DropdownRegistry {
     services: ShellServices,
     cache: RefCell<HashMap<String, Rc<DropdownInstance>>>,
+    coordinator: Rc<OpenSurfaceCoordinator>,
 }
 
 impl DropdownRegistry {
-    pub(crate) fn new(services: &ShellServices) -> Self {
+    pub(crate) fn new(
+        services: &ShellServices,
+        monitor: &gtk::gdk::Monitor,
+        bar_window: &gtk::Window,
+    ) -> Self {
+        let coordinator = Rc::new(OpenSurfaceCoordinator::default());
+        // The scrim needs the coordinator (for its dismiss handlers), and the
+        // coordinator owns the scrim thereafter (show/hide on open/close).
+        coordinator.set_scrim(Scrim::new(services, monitor, bar_window, &coordinator));
         Self {
             services: services.clone(),
             cache: RefCell::default(),
+            coordinator,
         }
     }
 
-    /// Updates autohide on all cached dropdown popovers.
-    pub(crate) fn set_all_autohide(&self, autohide: bool) {
-        for instance in self.cache.borrow().values() {
-            instance.popover.set_autohide(autohide);
-        }
+    pub(crate) fn coordinator(&self) -> Rc<OpenSurfaceCoordinator> {
+        self.coordinator.clone()
     }
 
     pub(crate) fn warm_all(&self) {
@@ -396,6 +435,9 @@ impl DropdownRegistry {
             return None;
         };
         let instance = Rc::new(raw);
+        instance.attach(DropdownWiring {
+            coordinator: self.coordinator.clone(),
+        });
         cache.insert(name.to_owned(), instance.clone());
         debug!(dropdown = name, "dropdown cached");
         Some(instance)
@@ -452,21 +494,6 @@ fn dispatch_action(
     }
 }
 
-fn set_bar_keyboard_mode(popover: &gtk::Popover, mode: KeyboardMode) {
-    let Some(parent) = popover.parent() else {
-        return;
-    };
-
-    let Some(window) = parent
-        .root()
-        .and_then(|root| root.downcast::<gtk::Window>().ok())
-    else {
-        return;
-    };
-
-    window.set_keyboard_mode(mode);
-}
-
 fn dropdown_style(registry: &DropdownRegistry) -> DropdownStyle {
     let config = registry.services.config.config();
     let bar = &config.bar;
@@ -475,7 +502,6 @@ fn dropdown_style(registry: &DropdownRegistry) -> DropdownStyle {
         margins: DropdownMargins::new(scale, bar.location.get()),
         opacity: f64::from(bar.dropdown_opacity.get().value()) / 100.0,
         shadow_enabled: bar.dropdown_shadow.get(),
-        autohide: bar.dropdown_autohide.get(),
         freeze_label: bar.dropdown_freeze_label.get(),
     }
 }

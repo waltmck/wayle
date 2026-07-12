@@ -239,11 +239,6 @@ pub struct BarConfig {
     #[default(Percentage::new(100))]
     pub dropdown_opacity: ConfigProperty<Percentage>,
 
-    /// Close dropdown when clicking outside it.
-    #[serde(rename = "dropdown-autohide")]
-    #[default(true)]
-    pub dropdown_autohide: ConfigProperty<bool>,
-
     /// Freeze the bar button label while its dropdown is open.
     ///
     /// Prevents the button from resizing mid-interaction, which keeps the

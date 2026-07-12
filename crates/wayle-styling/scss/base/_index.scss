@@ -12,6 +12,18 @@ window {
     font-family: var(--font-sans);
 }
 
+// The dropdown/menu dismissal scrim is a fullscreen input catcher. It must be
+// visually transparent, but NOT fully transparent: on Hyprland/wlroots pointer
+// input for a layer surface is hit-tested against committed painted content, so
+// a `transparent` scrim commits an empty buffer and clicks fall straight through
+// (an explicit input region + queue_render is not enough). A ~1/255 alpha fill
+// forces a full-monitor painted buffer that the compositor hit-tests, while being
+// visually imperceptible. This is the standard trick wlroots shells ship. More
+// specific than the `window` rule above, so it wins in the same stylesheet.
+window.dropdown-scrim {
+    background-color: rgba(0, 0, 0, 0.004);
+}
+
 popover.background {
     background: transparent;
 

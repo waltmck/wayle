@@ -3,16 +3,19 @@ mod battery;
 mod bluetooth;
 mod brightness;
 mod calendar;
+mod coordinator;
 mod dashboard;
 mod iwd;
 mod media;
 mod network;
 mod notification;
 mod registry;
+mod scrim;
 mod weather;
 
 use wayle_iwd::SignalStrength;
 
+pub(crate) use self::coordinator::{DismissFn, OpenSurfaceCoordinator};
 pub(crate) use self::registry::{
     DropdownFactory, DropdownInstance, DropdownRegistry, dispatch_click, dispatch_click_widget,
     require_service,

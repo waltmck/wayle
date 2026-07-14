@@ -93,6 +93,31 @@ fn generate(parsed_struct: ItemStruct, args: MacroArgs) -> syn::Result<TokenStre
         quote! { keys.extend(<#field_type>::all_i18n_keys()); }
     });
 
+    // For any config with `ClickAction` fields (bar buttons, cava, …), implement
+    // `DropdownSources` by reading those clicks *live* — the source of truth for
+    // `wayle dropdown list`, so modules never hand-list their dropdowns and the list
+    // tracks runtime re-configuration of the bindings.
+    let dropdown_sources_impl = if processed.click_action_fields.is_empty() {
+        quote! {}
+    } else {
+        let click_fields = &processed.click_action_fields;
+        quote! {
+            impl #struct_generics wayle_config::DropdownSources for #struct_name #struct_generics {
+                fn dropdown_names(&self) -> Vec<String> {
+                    let mut names: Vec<String> = Vec::new();
+                    #(
+                        if let wayle_config::ClickAction::Dropdown(name) = self.#click_fields.get()
+                            && !names.contains(&name)
+                        {
+                            names.push(name);
+                        }
+                    )*
+                    names
+                }
+            }
+        }
+    };
+
     Ok(quote! {
         #(#struct_attrs)*
         #[derive(
@@ -133,6 +158,8 @@ fn generate(parsed_struct: ItemStruct, args: MacroArgs) -> syn::Result<TokenStre
                 keys
             }
         }
+
+        #dropdown_sources_impl
     })
 }
 
@@ -141,6 +168,8 @@ struct ProcessedFields {
     default_initializers: Vec<TokenStream2>,
     i18n_keys: Vec<String>,
     container_fields: Vec<(syn::Ident, syn::Type)>,
+    /// Fields typed `ConfigProperty<ClickAction>`, used to generate `dropdown_names`.
+    click_action_fields: Vec<syn::Ident>,
 }
 
 fn process_fields(fields: &FieldsNamed, i18n_prefix: Option<&str>) -> syn::Result<ProcessedFields> {
@@ -149,6 +178,7 @@ fn process_fields(fields: &FieldsNamed, i18n_prefix: Option<&str>) -> syn::Resul
         default_initializers: Vec::new(),
         i18n_keys: Vec::new(),
         container_fields: Vec::new(),
+        click_action_fields: Vec::new(),
     };
 
     for field in &fields.named {
@@ -196,6 +226,10 @@ fn process_fields(fields: &FieldsNamed, i18n_prefix: Option<&str>) -> syn::Resul
                 .push((field_ident.clone(), field_type.clone()));
         }
 
+        if is_click_action_property(field_type) {
+            output.click_action_fields.push(field_ident.clone());
+        }
+
         output.field_tokens.push(quote! {
             #(#passthrough_attrs)*
             #field_visibility #field_ident: #field_type
@@ -217,6 +251,36 @@ fn process_fields(fields: &FieldsNamed, i18n_prefix: Option<&str>) -> syn::Resul
     }
 
     Ok(output)
+}
+
+/// Whether `ty` is `ConfigProperty<ClickAction>` (the click-action fields whose
+/// `Dropdown(..)` values feed `dropdown_names`). Matched structurally on the last
+/// path segments, so it works regardless of how the types are imported.
+///
+/// NOTE: the match is by *last path segment name only* — any `ConfigProperty<T>` whose
+/// `T` is (or ends in) a type named `ClickAction` is treated as a click action. That is
+/// fine today (the only such type is `wayle_config::ClickAction`; `WorkspaceClickAction`
+/// is deliberately a distinct name and is not matched), but a future type coincidentally
+/// named `ClickAction` would be swept in. The behavior is locked by a test in
+/// `wayle-config` (`dropdown_sources` module).
+fn is_click_action_property(ty: &syn::Type) -> bool {
+    let syn::Type::Path(type_path) = ty else {
+        return false;
+    };
+    let Some(segment) = type_path.path.segments.last() else {
+        return false;
+    };
+    if segment.ident != "ConfigProperty" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return false;
+    };
+    matches!(
+        args.args.first(),
+        Some(syn::GenericArgument::Type(syn::Type::Path(inner)))
+            if inner.path.segments.last().is_some_and(|s| s.ident == "ClickAction")
+    )
 }
 
 const BAR_BUTTON_REQUIRED: &[&str] = &[

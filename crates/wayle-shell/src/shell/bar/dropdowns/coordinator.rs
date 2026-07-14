@@ -4,9 +4,15 @@
 //!
 //! It also owns the shared [`Scrim`] and drives the whole open/close ceremony, so
 //! the two surface types (dropdowns, systray menu) don't each hand-roll it:
-//! [`open`](OpenSurfaceCoordinator::open) shows the scrim then closes the previous
-//! surface (show-before-close keeps the scrim ref-count positive across a swap),
-//! and [`notify_closed`](OpenSurfaceCoordinator::notify_closed) hides it.
+//! [`open`](OpenSurfaceCoordinator::open) installs the new surface then closes the
+//! previous one (show-before-close keeps the scrim shown across a swap), and
+//! [`notify_closed`](OpenSurfaceCoordinator::notify_closed) re-derives scrim visibility.
+//!
+//! It is likewise the single *decision* authority: [`toggle`](OpenSurfaceCoordinator::toggle)
+//! decides open-vs-close-vs-swap for any opener (bar clicks, the tray, and the CLI
+//! all route through it), and [`handle_bar_click`](OpenSurfaceCoordinator::handle_bar_click)
+//! decides which bar clicks dismiss. Because a swap is thus handled entirely by
+//! `open`'s show-before-close, there is no press-time dismissal dip — no debounce.
 //!
 //! A surface is represented by *how to close it* (a `DismissFn`) plus an optional
 //! *key handler* (`KeyHandler`) for keyboard nav and the *anchor* bar widget it
@@ -33,12 +39,19 @@ pub(crate) type DismissFn = Rc<dyn Fn()>;
 /// Consumes a forwarded key for the open surface; returns `true` when handled.
 pub(crate) type KeyHandler = Rc<dyn Fn(gtk::gdk::Key) -> bool>;
 
+/// CSS class marking a widget as a dropdown *opener* — clicking it toggles a
+/// surface itself, so `handle_bar_click` must not pre-dismiss on press. Applied
+/// eagerly at construction by the bar factory (`BarItemFactory::init_widgets`) to a
+/// dropdown-capable module's outer widget; `handle_bar_click` only tests the mark.
+/// (The tray button is intentionally NOT marked — its left/middle-click activate
+/// should dismiss, and its right-click menu is opened by a separate gesture.)
+pub(crate) const OPENER_CSS_CLASS: &str = "dropdown-opener";
+
 struct OpenSurface {
     dismiss: DismissFn,
     keys: Option<KeyHandler>,
-    /// The bar widget this surface hangs off (a dropdown/tray button). A bar click
-    /// on this widget is left to the button's own toggle/swap; a bar click
-    /// anywhere else dismisses.
+    /// The bar widget this surface hangs off (a dropdown/tray button/container).
+    /// `toggle` compares against it to decide "clicked my own opener → close".
     anchor: Option<gtk::glib::WeakRef<gtk::Widget>>,
 }
 
@@ -60,8 +73,24 @@ impl OpenSurfaceCoordinator {
         let _ = self.scrim.set(scrim);
     }
 
+    // The scrim is attached exactly once, in `DropdownRegistry::new`, immediately
+    // after the coordinator is constructed and before any surface can open — so it is
+    // always present by the time anything calls this.
+    #[allow(clippy::expect_used)]
     fn scrim(&self) -> &Rc<Scrim> {
         self.scrim.get().expect("scrim attached at init")
+    }
+
+    /// The scrim is shown iff a surface is open. Called after every mutation of
+    /// `current`, so scrim visibility is a pure function of that single source of
+    /// truth. Both `show`/`hide` are idempotent, so a missed `connect_closed` can't
+    /// strand the scrim "shown" the way the old ref-count could.
+    fn sync_scrim(&self) {
+        if self.current.borrow().is_some() {
+            self.scrim().show();
+        } else {
+            self.scrim().hide();
+        }
     }
 
     /// Register `dismiss` (an optional key handler, and the anchor bar widget) as
@@ -73,17 +102,16 @@ impl OpenSurfaceCoordinator {
         keys: Option<KeyHandler>,
         anchor: Option<gtk::glib::WeakRef<gtk::Widget>>,
     ) {
-        // Show the scrim BEFORE closing the previous surface so its ref-count stays
-        // positive across the swap (no flicker / bar-layer thrash).
-        self.scrim().show();
         // Install the new one BEFORE closing the old, so the old surface's
-        // `connect_closed` (→ `notify_closed`) sees a different `current` and is
-        // a no-op for it.
+        // `connect_closed` (→ `notify_closed`) sees a different `current` and is a
+        // no-op for it. `current` is now Some, so `sync_scrim` shows the scrim
+        // before the close — it never dips to hidden across a swap.
         let previous = self.current.borrow_mut().replace(OpenSurface {
             dismiss,
             keys,
             anchor,
         });
+        self.sync_scrim();
         if let Some(previous) = previous {
             self.dismissing.set(true);
             (previous.dismiss)();
@@ -91,10 +119,30 @@ impl OpenSurfaceCoordinator {
         }
     }
 
+    /// If `dismiss` identifies the currently-open surface, move it to a new
+    /// `anchor` in place and return `true` — a *re-anchor*: the same surface reused
+    /// from a different opener (e.g. a shared dropdown reparented from one bar
+    /// button to another that opens the same dropdown). `current` never goes
+    /// `None`, so the scrim stays shown with no hide→show dip. Returns `false` when
+    /// it isn't the open surface, so the caller falls back to [`open`](Self::open).
+    pub(crate) fn reanchor(
+        &self,
+        dismiss: &DismissFn,
+        anchor: Option<gtk::glib::WeakRef<gtk::Widget>>,
+    ) -> bool {
+        let mut current = self.current.borrow_mut();
+        let Some(surface) = current.as_mut() else {
+            return false;
+        };
+        if !Rc::ptr_eq(&surface.dismiss, dismiss) {
+            return false;
+        }
+        surface.anchor = anchor;
+        true
+    }
+
     /// A surface reports it closed (from its `connect_closed`). Clears the slot
-    /// (unless mid-swap or no longer the registered one) and drops its scrim ref.
-    /// Callers must invoke this exactly once per `open` so the scrim ref-count
-    /// stays balanced.
+    /// unless mid-swap or no longer the registered one, then re-derives the scrim.
     pub(crate) fn notify_closed(&self, who: &DismissFn) {
         if !self.dismissing.get() {
             let mut current = self.current.borrow_mut();
@@ -105,7 +153,7 @@ impl OpenSurfaceCoordinator {
                 *current = None;
             }
         }
-        self.scrim().hide();
+        self.sync_scrim();
     }
 
     /// Close whatever is open (the scrim/bar Escape handlers, scrim outside-click).
@@ -113,28 +161,80 @@ impl OpenSurfaceCoordinator {
     /// whether to consume the key.
     pub(crate) fn dismiss_current(&self) -> bool {
         let current = self.current.borrow_mut().take();
+        let dismissed = current.is_some();
         if let Some(current) = current {
             (current.dismiss)();
-            true
+        }
+        // `current` is now None, so the scrim hides — even if the dismiss's
+        // `connect_closed` stranded its token and never reached `notify_closed`.
+        self.sync_scrim();
+        dismissed
+    }
+
+    /// Whether a dismissable surface is currently open. The bar consults this before
+    /// re-layering itself on a config change: while a surface is open the scrim owns the
+    /// bar's layer (raised to Overlay), so the bar must not drop below the still-active
+    /// scrim — [`Scrim::hide`] re-applies the configured layer when the surface closes.
+    pub(crate) fn has_open_surface(&self) -> bool {
+        self.current.borrow().is_some()
+    }
+
+    /// The single open/close/toggle decision for an opener — a dropdown button, a
+    /// tray button, or `wayle dropdown toggle`. If the open surface
+    /// is anchored to this same `anchor` widget, close it; otherwise run `open`,
+    /// which builds/reparents/shows and calls [`open`](Self::open), whose
+    /// show-before-close swaps out any other open surface with no scrim dip.
+    ///
+    /// `anchor` is the caller's canonical anchor widget (the same object stored in
+    /// `OpenSurface.anchor`), so this is a plain widget-identity comparison.
+    pub(crate) fn toggle(&self, anchor: &gtk::Widget, open: impl FnOnce()) {
+        if self.on_same_anchor(anchor) {
+            self.dismiss_current();
         } else {
-            false
+            open();
         }
     }
 
-    /// Dismiss the open surface for a click on the bar at `target` (the picked
-    /// widget), unless the click landed on that surface's own anchor button —
-    /// which handles its own toggle/swap. So clicking empty bar, a workspace
-    /// button, etc. dismisses; clicking the open dropdown's button toggles it.
-    pub(crate) fn handle_bar_click(&self, target: Option<&gtk::Widget>) {
-        let on_anchor = self
-            .current
+    /// Like [`toggle`](Self::toggle), but *open-only*: if this `anchor`'s surface is
+    /// already open, do nothing (rather than closing it); otherwise run `open`.
+    /// Backs `wayle dropdown open` (open-if-closed, no-op-if-open).
+    pub(crate) fn open_only(&self, anchor: &gtk::Widget, open: impl FnOnce()) {
+        if !self.on_same_anchor(anchor) {
+            open();
+        }
+    }
+
+    /// Whether the currently-open surface is anchored to `anchor` (a plain
+    /// widget-identity comparison against `OpenSurface.anchor`). Computed in a `let`
+    /// so the `current` borrow is dropped before any follow-up open/dismiss.
+    fn on_same_anchor(&self, anchor: &gtk::Widget) -> bool {
+        self.current
             .borrow()
             .as_ref()
-            .and_then(|open| open.anchor.as_ref())
+            .and_then(|surface| surface.anchor.as_ref())
             .and_then(gtk::glib::WeakRef::upgrade)
-            .zip(target)
-            .is_some_and(|(anchor, target)| *target == anchor || target.is_ancestor(&anchor));
-        if !on_anchor {
+            .is_some_and(|current_anchor| current_anchor == *anchor)
+    }
+
+    /// Dismiss the open surface for a click on the bar at `target` (the picked
+    /// widget), unless the click landed on (or inside) a dropdown *opener* widget.
+    /// Openers carry the `dropdown-opener` CSS class (applied eagerly at construction
+    /// by the factory); they toggle/swap themselves dip-free via [`toggle`](Self::toggle),
+    /// so pre-dismissing their press would only cause a flash. Everything else —
+    /// empty bar, a workspace button, a tray icon — dismisses. This is the automatic
+    /// dismiss; modules never call `dismiss_current` for ordinary clicks.
+    pub(crate) fn handle_bar_click(&self, target: Option<&gtk::Widget>) {
+        let on_opener = target.is_some_and(|target| {
+            let mut widget = Some(target.clone());
+            while let Some(current) = widget {
+                if current.has_css_class(OPENER_CSS_CLASS) {
+                    return true;
+                }
+                widget = current.parent();
+            }
+            false
+        });
+        if !on_opener {
             self.dismiss_current();
         }
     }

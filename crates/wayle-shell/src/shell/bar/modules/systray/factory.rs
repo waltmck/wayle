@@ -28,6 +28,8 @@ impl ModuleFactory for Factory {
             systray,
             config: services.config.clone(),
             coordinator: dropdowns.coordinator(),
+            shell_ipc: services.shell_ipc.state(),
+            monitor: settings.monitor_name.clone(),
         };
         let controller = dynamic_controller(SystrayModule::builder().launch(init).detach());
         Some(ModuleInstance { controller, class })

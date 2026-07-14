@@ -6,7 +6,7 @@ mod modules;
 mod styling;
 mod watchers;
 
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use factory::*;
 use gtk::prelude::*;
@@ -15,8 +15,11 @@ use relm4::{factory::FactoryVecDeque, gtk, gtk::gdk, prelude::*};
 use wayle_config::{ConfigProperty, schemas::bar::BarLayout};
 use wayle_widgets::{prelude::BarSettings, styling::InlineStyling};
 
-use self::dropdowns::DropdownRegistry;
-use crate::shell::{helpers::layer_shell::apply_layer, services::ShellServices};
+use self::dropdowns::{DropdownOpener, DropdownRegistry};
+use crate::{
+    services::shell_ipc::DropdownAction,
+    shell::{helpers::layer_shell::apply_layer, services::ShellServices},
+};
 
 pub(crate) struct Bar {
     settings: BarSettings,
@@ -29,6 +32,12 @@ pub(crate) struct Bar {
     left: FactoryVecDeque<BarItemFactory>,
     center: FactoryVecDeque<BarItemFactory>,
     right: FactoryVecDeque<BarItemFactory>,
+
+    /// Maps a dropdown identifier (e.g. `audio@microphone`) to the module's opener
+    /// and the dropdown name it toggles, rebuilt from the live modules whenever the
+    /// layout changes. Backs `wayle dropdown toggle` — dispatching through the
+    /// same opener the module's own click uses.
+    dropdown_targets: RefCell<HashMap<String, (DropdownOpener, String)>>,
 }
 
 pub(crate) struct BarInit {
@@ -42,6 +51,12 @@ pub(crate) enum BarCmd {
     StyleChanged,
     ExclusiveChanged(bool),
     LayerChanged,
+    /// A CLI dropdown request (`toggle`/`open`/`close`) targeting this bar. The
+    /// `String` is the dropdown identifier (empty for [`DropdownAction::Close`]).
+    Dropdown(DropdownAction, String),
+    /// The config was reloaded; re-derive the dropdown identifier map and republish
+    /// it (openers read their names live, so a re-bound click updates `dropdown list`).
+    RepublishDropdowns,
 }
 
 #[relm4::component(pub(crate))]
@@ -99,14 +114,8 @@ impl Component for Bar {
 
         let ipc_state = init.services.shell_ipc.state();
 
-        let visible_on_startup = {
-            let connector = monitor_name.as_deref().unwrap_or("unknown");
-            let layouts = config.bar.layout.get();
-            let config_visible = watchers::layout::find_layout(&layouts, connector)
-                .is_some_and(|layout| layout.show);
-
-            config_visible && !ipc_state.hidden_bars.get().contains(connector)
-        };
+        let visible_on_startup =
+            Self::visible_on_startup(config, &ipc_state, monitor_name.as_deref().unwrap_or("unknown"));
 
         let settings = BarSettings {
             variant: config.bar.button_variant.clone(),
@@ -154,41 +163,18 @@ impl Component for Bar {
         watchers::layout::spawn(&sender, &init.monitor, &init.services.config, &ipc_state);
         watchers::exclusive::spawn(&sender, &init.services.config);
         watchers::layer::spawn(&sender, &init.services.config);
+        watchers::dropdown::spawn(&sender, &init.monitor, &init.services.config, &ipc_state);
 
         let dropdowns = Rc::new(DropdownRegistry::new(&init.services, &init.monitor, &root));
         dropdowns.warm_all();
-
-        // Keyboard for open dropdowns/menus is handled where focus is: when the
-        // bar (or one of its popovers) holds keyboard focus, Escape closes the open
-        // surface and nav keys drive the systray menu's cascade. The scrim handles
-        // the same when the pointer is over the empty desktop; together they cover
-        // any pointer position. Capture phase so it wins before any widget.
-        let keys = gtk::EventControllerKey::new();
-        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        keys.connect_key_pressed({
-            let coordinator = dropdowns.coordinator();
-            move |_, keyval, _, _| coordinator.handle_key_event(keyval)
+        dropdowns.set_republish({
+            let command = sender.command_sender().clone();
+            Rc::new(move || {
+                let _ = command.send(BarCmd::RepublishDropdowns);
+            })
         });
-        root.add_controller(keys);
 
-        // A click anywhere on the bar (empty area, a workspace button, etc.)
-        // dismisses the open dropdown/menu — except a click on its own anchor
-        // button, which is left to that button's toggle/swap. Capture phase so it
-        // runs before the button's own handler (dismiss-then-open for a swap).
-        let click_dismiss = gtk::GestureClick::new();
-        click_dismiss.set_propagation_phase(gtk::PropagationPhase::Capture);
-        click_dismiss.connect_pressed({
-            let coordinator = dropdowns.coordinator();
-            let root = root.downgrade();
-            move |_, _, x, y| {
-                let Some(root) = root.upgrade() else {
-                    return;
-                };
-                let target = root.pick(x, y, gtk::PickFlags::DEFAULT);
-                coordinator.handle_bar_click(target.as_ref());
-            }
-        });
-        root.add_controller(click_dismiss);
+        Self::install_dismiss_controllers(&root, &dropdowns);
 
         let mut model = Self {
             settings,
@@ -207,6 +193,7 @@ impl Component for Bar {
             left,
             center,
             right,
+            dropdown_targets: RefCell::new(HashMap::new()),
         };
 
         model.spawn_style_watcher(&sender);
@@ -242,6 +229,7 @@ impl Component for Bar {
         match msg {
             BarCmd::LayoutLoaded(layout) => {
                 self.apply_layout(layout, root);
+                self.rebuild_dropdown_targets();
             }
             BarCmd::StyleChanged => {
                 let new_css = self.build_css();
@@ -254,8 +242,21 @@ impl Component for Bar {
                 Self::apply_exclusive_zone(root, exclusive);
             }
             BarCmd::LayerChanged => {
-                let configured = self.services.config.config().bar.layer.get();
-                apply_layer(root, configured, &self.services.config);
+                // While a dropdown/menu is open the scrim has raised the bar to Overlay
+                // and owns its layer; re-layering now would drop it below the active
+                // full-monitor scrim (which would then swallow the popover's clicks).
+                // Defer — `Scrim::hide` re-reads and applies the configured layer when
+                // the surface closes.
+                if !self.dropdowns.coordinator().has_open_surface() {
+                    let configured = self.services.config.config().bar.layer.get();
+                    apply_layer(root, configured, &self.services.config);
+                }
+            }
+            BarCmd::Dropdown(action, identifier) => {
+                self.handle_dropdown_request(action, &identifier, root);
+            }
+            BarCmd::RepublishDropdowns => {
+                self.rebuild_dropdown_targets();
             }
         }
     }

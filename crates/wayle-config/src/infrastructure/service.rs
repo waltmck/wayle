@@ -169,6 +169,19 @@ impl ConfigService {
         })
     }
 
+    /// Subscribes to config reload events.
+    ///
+    /// Returns a receiver that fires whenever the main or runtime config is reloaded
+    /// from disk (after the new values are committed). Returns `None` if the watcher
+    /// is not initialized.
+    pub fn subscribe_config_reload(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        self.watcher.read().ok().and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|watcher| watcher.subscribe_config_reload())
+        })
+    }
+
     /// Persists runtime layer values to `runtime.toml`.
     ///
     /// Only values with runtime overrides are written.

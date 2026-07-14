@@ -24,7 +24,7 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
   - Allows switching between dropdown menus with a single click, rather than having to click twice (one to close the existing menu and one to open the next one).
   - The bar and dropdown will stay on top of full-screen apps when there is a dropdown open
   - CLI dispatchers to open, close, and toggle dropdown menus:
-    - `wayle dropdown list` lists available dropdown menus. These are addressed by IDs `dropdown@parent-module`, i.e. `weather@clock` vs `calendar@clock`; duplicates are numbered left to right (i.e. `dashboard@dashboard#1` vs `dashboard@dashboard#2`.
+    - `wayle dropdown list` lists available dropdown menus. These are addressed by IDs `dropdown@parent-module`, i.e. `weather@clock` vs `calendar@clock`; duplicates are numbered left to right (i.e. `dashboard@dashboard#1` vs `dashboard@dashboard#2`). The list is live-updated from the configuration (any module with a `dropdown:<name>` action).
     - `wayle dropdown toggle <name>` toggles a given dropdown menu by name
     - `wayle dropdown open <name>` opens a dropdown menu by name (no-ops if already open)
     - `wayle dropdown close` closes all dropdowns (including systray dropdowns)

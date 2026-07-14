@@ -34,7 +34,7 @@ use wayle_wallpaper::WallpaperService;
 use zbus::{Connection, fdo::DBusProxy};
 
 use crate::{
-    services::{IdleInhibitService, ShellIpcService},
+    services::{IdleInhibitService, ShellIpcService, shell_ipc::ActiveMonitor},
     shell::ShellServices,
     startup::StartupTimer,
     watchers::build_extractor_config,
@@ -152,7 +152,15 @@ pub async fn init_services(
     spawn_deferred_bluetooth(bluetooth.clone());
     spawn_deferred_power_profiles(power_profiles.clone());
 
-    let shell_ipc = match ShellIpcService::new().await {
+    // "Active monitor" (the `--monitor` default) is the compositor's focused
+    // output, read on demand from whichever WM integration is present.
+    let active_monitor = ActiveMonitor::new(
+        optional.hyprland.clone(),
+        optional.niri.clone(),
+        optional.mango.clone(),
+    );
+
+    let shell_ipc = match ShellIpcService::new(active_monitor).await {
         Ok(service) => Arc::new(service),
         Err(err) => {
             warn!(error = %err, "Shell IPC service unavailable");

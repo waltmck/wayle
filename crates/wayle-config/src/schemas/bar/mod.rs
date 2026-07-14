@@ -1,6 +1,8 @@
+mod resolve;
 mod types;
 
 use schemars::schema_for;
+pub use resolve::find_layout;
 pub use types::{
     BarButtonVariant, BarGroup, BarItem, BarLayout, BarModule, BorderLocation, ClassedModule,
     IconPosition, Location, ModuleRef, ShadowPreset,

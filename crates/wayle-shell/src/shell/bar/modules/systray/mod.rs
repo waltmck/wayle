@@ -9,7 +9,7 @@ mod watchers;
 use std::{rc::Rc, sync::Arc};
 
 use gtk4::prelude::{OrientableExt, WidgetExt};
-use item::SystrayItem;
+use item::{SystrayItem, SystrayItemMsg};
 use relm4::{ComponentParts, ComponentSender, factory::FactoryVecDeque, gtk, prelude::*};
 use wayle_config::{ConfigProperty, ConfigService};
 use wayle_widgets::prelude::{
@@ -20,7 +20,7 @@ pub(crate) use self::{
     factory::Factory,
     messages::{SystrayCmd, SystrayInit, SystrayMsg},
 };
-use crate::shell::bar::dropdowns::OpenSurfaceCoordinator;
+use crate::{services::shell_ipc::SystrayMenuAction, shell::bar::dropdowns::OpenSurfaceCoordinator};
 
 pub(crate) struct SystrayModule {
     container: Controller<BarContainer>,
@@ -90,7 +90,14 @@ impl Component for SystrayModule {
 
         let css_provider = styling::init_css_provider(items.widget(), &init.config);
 
-        watchers::spawn_watchers(&sender, &init.is_vertical, &init.systray, &init.config);
+        watchers::spawn_watchers(
+            &sender,
+            &init.is_vertical,
+            &init.systray,
+            &init.config,
+            &init.shell_ipc,
+            init.monitor.clone(),
+        );
 
         let model = Self {
             container,
@@ -133,6 +140,20 @@ impl Component for SystrayModule {
                 };
                 self.items.widget().set_orientation(orientation);
                 force_window_resize(root);
+            }
+            SystrayCmd::MenuRequest(action, id) => {
+                // Route through the item's own menu path (the same one its
+                // right-click uses), so CLI and mouse behave identically.
+                let msg = match action {
+                    SystrayMenuAction::Toggle => SystrayItemMsg::ToggleMenu,
+                    SystrayMenuAction::Open => SystrayItemMsg::OpenMenu,
+                };
+                for index in 0..self.items.len() {
+                    if self.items.get(index).is_some_and(|item| item.tray_id() == id) {
+                        self.items.send(index, msg);
+                        break;
+                    }
+                }
             }
         }
     }

@@ -34,9 +34,6 @@ pub(super) struct SystrayItem {
     /// coordinator registration is released exactly once (via either the popover's
     /// `connect_closed` or an explicit teardown, never both).
     menu_reg: Option<(DismissFn, Rc<Cell<bool>>)>,
-    /// Set while an async `AboutToShow` refresh is pending, so a second right-click
-    /// in that window doesn't spawn a second `ShowMenu` that flaps the menu closed.
-    pending_show: Cell<bool>,
     cancel_token: CancellationToken,
 }
 
@@ -46,7 +43,12 @@ pub(super) enum SystrayItemMsg {
     LeftClick,
     RightClick,
     MiddleClick,
-    ShowMenu,
+    /// Toggle this item's menu from the CLI (`wayle systray toggle <id>`), routed
+    /// through the same path as a right-click.
+    ToggleMenu,
+    /// Open this item's menu from the CLI (`wayle systray open <id>`): open if
+    /// closed, no-op if already open.
+    OpenMenu,
     MenuUpdated,
     IconUpdated,
 }
@@ -87,7 +89,6 @@ impl FactoryComponent for SystrayItem {
             menu: None,
             coordinator: init.coordinator,
             menu_reg: None,
-            pending_show: Cell::new(false),
             cancel_token: CancellationToken::new(),
         }
     }
@@ -166,12 +167,11 @@ impl FactoryComponent for SystrayItem {
                     }
                 });
             }
-            SystrayItemMsg::RightClick => {
-                self.request_menu_show(&_sender);
+            SystrayItemMsg::RightClick | SystrayItemMsg::ToggleMenu => {
+                self.request_menu_show(true);
             }
-
-            SystrayItemMsg::ShowMenu => {
-                self.toggle_menu();
+            SystrayItemMsg::OpenMenu => {
+                self.request_menu_show(false);
             }
             SystrayItemMsg::MiddleClick => {
                 let item = self.item.clone();
@@ -195,6 +195,13 @@ impl FactoryComponent for SystrayItem {
                 }
             }
         }
+    }
+}
+
+impl SystrayItem {
+    /// The stable SNI id used to address this item from the CLI.
+    pub(super) fn tray_id(&self) -> String {
+        self.item.id.get()
     }
 }
 

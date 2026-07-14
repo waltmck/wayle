@@ -15,10 +15,9 @@ mod weather;
 
 use wayle_iwd::SignalStrength;
 
-pub(crate) use self::coordinator::{DismissFn, OpenSurfaceCoordinator};
+pub(crate) use self::coordinator::{DismissFn, OPENER_CSS_CLASS, OpenSurfaceCoordinator};
 pub(crate) use self::registry::{
-    DropdownFactory, DropdownInstance, DropdownRegistry, dispatch_click, dispatch_click_widget,
-    require_service,
+    DropdownFactory, DropdownInstance, DropdownOpener, DropdownRegistry, require_service,
 };
 use crate::shell::services::ShellServices;
 

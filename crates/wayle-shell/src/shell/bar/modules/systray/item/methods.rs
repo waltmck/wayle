@@ -3,15 +3,12 @@ use std::{cell::Cell, rc::Rc};
 #[allow(deprecated)]
 use gtk4::prelude::StyleContextExt;
 use gtk4::gdk;
-use relm4::{
-    gtk::{self, prelude::*},
-    prelude::*,
-};
+use relm4::gtk::{self, prelude::*};
 use tracing::debug;
 use wayle_systray::types::Coordinates;
 
 use super::{
-    SystrayItem, SystrayItemMsg, menu,
+    SystrayItem, menu,
     helpers::{create_texture_from_pixmap, load_icon_from_theme_path, select_best_pixmap},
 };
 use crate::shell::{
@@ -19,49 +16,41 @@ use crate::shell::{
 };
 
 impl SystrayItem {
-    pub(super) fn request_menu_show(&self, sender: &FactorySender<Self>) {
+    /// Show this item's menu. `toggle`: if the menu is already visible, dismiss it
+    /// (right-click / `systray toggle`); when `false` (`systray open`), leave an
+    /// already-open menu untouched.
+    pub(super) fn request_menu_show(&mut self, toggle: bool) {
         if let Some(menu) = self.menu.as_ref()
             && menu.is_visible()
         {
-            debug!(item_id = %self.item.id.get(), "hiding menu");
-            menu.dismiss();
+            if toggle {
+                debug!(item_id = %self.item.id.get(), "hiding menu");
+                menu.dismiss();
+            }
             return;
         }
 
-        // Coalesce rapid re-clicks: while the async refresh below is in flight a
-        // second click would spawn a second `ShowMenu` that flaps the menu closed.
-        // Cleared when `ShowMenu` is handled (see `toggle_menu`).
-        if self.pending_show.replace(true) {
-            return;
-        }
+        // Show synchronously from the cached menu layout so the scrim's bar->overlay
+        // re-layer happens INSIDE the click event. Doing an async `AboutToShow`
+        // round-trip *before* showing re-layers the bar ~100ms later under a
+        // stationary pointer, which Hyprland won't re-focus — silently dropping the
+        // bar's pointer focus (the "two right-clicks lose focus" bug), and the async
+        // gap also needs coalescing to avoid a swallowed close. Instead refresh in
+        // the background; the menu watcher (`MenuUpdated` -> `rebuild_menu_if_visible`)
+        // rebuilds the open menu in place if the layout changed.
+        self.show_menu();
 
         let item = self.item.clone();
-        let sender = sender.clone();
-
         tokio::spawn(async move {
             if let Err(error) = item.refresh_menu().await {
                 debug!(error = %error, "AboutToShow not supported");
             }
-
-            sender.input(SystrayItemMsg::ShowMenu);
         });
     }
 
-    pub(super) fn toggle_menu(&mut self) {
-        // The pending `ShowMenu` (if any) is now being handled.
-        self.pending_show.set(false);
-
-        if let Some(menu) = self.menu.as_ref()
-            && menu.is_visible()
-        {
-            debug!(item_id = %self.item.id.get(), "hiding menu");
-            menu.dismiss();
-            return;
-        }
-
-        self.show_menu();
-    }
-
+    // A cohesive linear sequence (guard → build → coordinator swap → wire → popup)
+    // whose steps must stay together; splitting it would fragment the swap bookkeeping.
+    #[allow(clippy::cognitive_complexity)]
     fn show_menu(&mut self) {
         let item_id = self.item.id.get();
         debug!(item_id = %item_id, title = %self.item.title.get(), "show_menu called");
@@ -84,26 +73,36 @@ impl SystrayItem {
             return;
         };
 
-        // Rebuild from scratch each time so the menu reflects the latest layout;
-        // tear down the previous cascade first so no popover is left parented.
-        // Teardown unparents without popdown, so release its coordinator/scrim
-        // registration explicitly.
-        self.clear_menu_registration();
-        if let Some(previous) = self.menu.take() {
-            previous.teardown();
-        }
+        // Rebuild from scratch each time so the menu reflects the latest layout. Build
+        // the new cascade FIRST, then let the coordinator's `open` (show-before-close)
+        // swap it in: the open surface stays registered across the swap, so the scrim
+        // never dips to hidden and the bar is never re-layered mid-rebuild. Re-layering
+        // the bar under a stationary pointer is exactly what drops its pointer focus, so
+        // clearing the old registration first (which hides the scrim, then re-shows it)
+        // would reintroduce that on every layout-changing `AboutToShow` refresh.
+        let old_menu = self.menu.take();
+        let old_reg = self.menu_reg.take();
 
         let menu = menu::build(&self.item, &root_menu, parent.upcast_ref());
         let dismiss = menu.dismiss_handle();
         let cleaned = Rc::new(Cell::new(false));
 
-        // `open` shows the scrim. Register the menu's key handler so nav keys
-        // forwarded from the bar/scrim (wherever keyboard focus is) drive the
-        // cascade, and the tray button as anchor so clicking it toggles rather than
-        // plain-dismisses.
+        // Register the new surface (its key handler drives the cascade from wherever
+        // keyboard focus sits; the tray button is its anchor). `open` closes the
+        // previous surface — the old menu, still the coordinator's `current` — under its
+        // dismissing guard, so the scrim stays shown across the swap.
         let anchor = parent.upcast_ref::<gtk::Widget>().downgrade();
         self.coordinator
             .open(dismiss.clone(), Some(menu.key_handler()), Some(anchor));
+
+        // `open` already closed the old surface; mark its guard so its `connect_closed`
+        // is a no-op (the coordinator has moved on) and tear its now-hidden popovers down.
+        if let Some((_old_dismiss, old_cleaned)) = old_reg {
+            old_cleaned.set(true);
+        }
+        if let Some(old_menu) = old_menu {
+            old_menu.teardown();
+        }
 
         menu.root_popover().connect_closed({
             let coordinator = self.coordinator.clone();

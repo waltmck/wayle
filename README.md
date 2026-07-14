@@ -18,11 +18,18 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
 - Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup. [#323](https://github.com/wayle-rs/wayle/pull/323)
 - Add `general.symbolic-icon-fallback` option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (applies to notification and workspace modules). [#325](https://github.com/wayle-rs/wayle/pull/325)
 - Pointer cursor on hover over workspace buttons, matching other clickable elements in the shell. [#326](https://github.com/wayle-rs/wayle/pull/326)
-- Redesigned dropover UI: switched from autohide popovers to a full-screen transparent scrim, similar to Astal/AGS and eww. [#328](https://github.com/wayle-rs/wayle/pull/328)
+- Redesigned and refactor dropdown menus: switched from autohide popovers to a full-screen transparent scrim, similar to Astal/AGS and eww. [#328](https://github.com/wayle-rs/wayle/pull/328)
   - Fixes [#62](https://github.com/wayle-rs/wayle/issues/62) and [#285](https://github.com/wayle-rs/wayle/issues/285)
   - Fully scrollable and arrow key navigable systray dropdows.
   - Allows switching between dropdown menus with a single click, rather than having to click twice (one to close the existing menu and one to open the next one).
-  - The bar and dropdown will stay on top of full-screen apps when there is a dropdown open, laying the groundwork for future work on reliable CLI dispatchers to open dropdown menus.
+  - The bar and dropdown will stay on top of full-screen apps when there is a dropdown open
+  - CLI dispatchers to open, close, and toggle dropdown menus:
+    - `wayle dropdown list` lists available dropdown menus. These are addressed by IDs `dropdown@parent-module`, i.e. `weather@clock` vs `calendar@clock`; duplicates are numbered left to right (i.e. `dashboard@dashboard#1` vs `dashboard@dashboard#2`.
+    - `wayle dropdown toggle <name>` toggles a given dropdown menu by name
+    - `wayle dropdown open <name>` opens a dropdown menu by name (no-ops if already open)
+    - `wayle dropdown close` closes all dropdowns (including systray dropdowns)
+    - `wayle systray {open, toggle}` functions similarly, opening/closing systray right-click menus by ID.
+    - The above open/toggle/close commands all act on the currently active monitor by default (this is determined in a compositor-specific way; they act on all monitors as a fallback). This can be overridden by passing `--monitor=<name>` (to act on a specific monitor) or `--monitor=all` (to act on all monitors).
 
 Roadmap:
 - Squash bugs in Media module's mpris2 controls [#156](https://github.com/wayle-rs/wayle/issues/156)

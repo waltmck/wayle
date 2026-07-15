@@ -104,9 +104,15 @@ impl TrayMenu {
 }
 
 /// Build a menu for `item` rooted at `root_item`, parenting the root popover to
-/// `parent` (the tray button).
-pub(super) fn build(item: &Arc<TrayItem>, root_item: &MenuItem, parent: &gtk::Widget) -> TrayMenu {
-    let ctx = construct::build_ctx(parent);
+/// `parent` (the tray button). `scale` is the configured bar scale, used to size
+/// the root menu's bar-gap offset to match the dropdown panels.
+pub(super) fn build(
+    item: &Arc<TrayItem>,
+    root_item: &MenuItem,
+    parent: &gtk::Widget,
+    scale: f32,
+) -> TrayMenu {
+    let ctx = construct::build_ctx(parent, scale);
     let root = construct::build_root(&ctx, root_item, parent);
 
     let inner = Rc::new(MenuInner {

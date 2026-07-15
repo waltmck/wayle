@@ -119,7 +119,9 @@ impl SystrayItem {
         }
         let parent = self.button.clone()?;
 
-        let menu = menu::build(&self.item, &root_menu, parent.upcast_ref());
+        // Bar scale sizes the root menu's bar-gap offset to match the dropdown panels.
+        let scale = self.config.config().bar.scale.get().value();
+        let menu = menu::build(&self.item, &root_menu, parent.upcast_ref(), scale);
         let dismiss = menu.dismiss_handle();
         // `registered` = "this menu is the coordinator's open surface, so closing it
         // must notify the coordinator". Set true on each present; flipped false

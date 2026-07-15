@@ -39,6 +39,13 @@ const FALLBACK_MONITOR_HEIGHT: i32 = 1080;
 const MENU_EDGE_MARGIN: i32 = 24;
 /// Floor so a menu opened from an oddly-placed anchor never collapses to nothing.
 const MIN_MENU_HEIGHT: i32 = 120;
+/// Gap between the bar's outer edge and the root menu card, matched to the
+/// dropdown panels' `DropdownMargins::GAP_REM` (dropdowns/registry.rs) so the
+/// systray menu sits the same distance from the bar. Applied as a popover offset
+/// (see [`realign_root`]).
+const ROOT_GAP_REM: f32 = 0.275;
+/// Logical pixels per rem, matching the dropdowns' `REM_PX`.
+const REM_PX: f32 = 16.0;
 
 /// The per-column height caps, computed once from the tray button's geometry and
 /// reused for every (re)build of a column — including submenu columns created
@@ -51,13 +58,18 @@ pub(super) struct BuildCtx {
     root_max_height: i32,
     /// Cap for submenu columns — a monitor fraction (see [`MAX_HEIGHT_FRACTION`]).
     submenu_max_height: i32,
+    /// The configured bar scale, for the root menu's bar-gap offset (see
+    /// [`realign_root`]).
+    scale: f32,
 }
 
-/// Compute the height caps from the tray button's on-screen geometry.
-pub(super) fn build_ctx(tray_button: &gtk::Widget) -> BuildCtx {
+/// Compute the height caps from the tray button's on-screen geometry; `scale` is
+/// the configured bar scale (for the root bar-gap offset).
+pub(super) fn build_ctx(tray_button: &gtk::Widget, scale: f32) -> BuildCtx {
     BuildCtx {
         root_max_height: root_available_height(tray_button),
         submenu_max_height: submenu_max_height(tray_button),
+        scale,
     }
 }
 
@@ -364,10 +376,15 @@ pub(super) fn reconcile_column(
         reconcile_column(inner, &child, children);
     }
 
-    // A visible submenu whose content height changed needs its top-alignment
-    // offset recomputed (it is a one-shot on map otherwise).
-    if column.depth > 0 && column.popover.is_visible() {
-        realign_submenu(&column.popover);
+    // A visible popover whose content/anchor changed needs its offset recomputed
+    // (the offsets are one-shot on map otherwise): the root keeps its bar-gap, a
+    // submenu its top-alignment.
+    if column.popover.is_visible() {
+        if column.depth == 0 {
+            realign_root(&column.popover, ctx.scale);
+        } else {
+            realign_submenu(&column.popover);
+        }
     }
 }
 
@@ -445,7 +462,7 @@ fn rederive_separators(column: &Rc<MenuColumn>, plan: &[RowPlan]) {
 
 /// Wire a column's popover and all its rows, recursing into submenu columns.
 pub(super) fn wire_columns(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>) {
-    wire_popover(column);
+    wire_popover(column, inner.ctx.scale);
 
     let children: Vec<Rc<MenuColumn>> = {
         let rows = column.rows.borrow();
@@ -465,15 +482,23 @@ pub(super) fn wire_columns(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>) {
     }
 }
 
-fn wire_popover(column: &Rc<MenuColumn>) {
+fn wire_popover(column: &Rc<MenuColumn>, scale: f32) {
     // No per-popover key controller: keyboard focus sits on the bar/scrim, not the
     // (non-focusable) menu columns, so nav keys are forwarded from there via the
-    // coordinator (see `menu`'s `key_handler`/`handle_key`). Submenus only nudge
-    // themselves on map so their first row lines up with the row that opened them.
+    // coordinator (see `menu`'s `key_handler`/`handle_key`).
     if column.depth == 0 {
+        // The root anchors to a tray icon button that is shorter than the bar, so
+        // GTK would place the menu overlapping the bar; offset it out to the bar's
+        // outer edge + a gap on `map` so it sits clear of the bar (matching the
+        // dropdown panels) and the compositor never has to re-constrain (shrink) it.
+        column
+            .popover
+            .connect_map(move |popover| realign_root(popover, scale));
         return;
     }
 
+    // Submenus only nudge themselves on map so their first row lines up with the
+    // row that opened them.
     column.popover.connect_map(realign_submenu);
 
     // When a submenu closes for any reason (Left/Escape, hovering away, or a
@@ -581,6 +606,72 @@ fn realign_submenu(popover: &gtk::Popover) {
         // GTK centres the popover on the anchor row; shift it down by half the
         // height difference so the popover's top sits at the row's top.
         popover.set_offset(0, (content_height - anchor_height) / 2);
+    }
+}
+
+/// Offset the root popover so its bar-facing edge sits at the bar's OUTER edge
+/// plus a gap, instead of at the (short, bar-centred) tray icon button's edge.
+/// GTK anchors the popover to the button, whose bar-facing edge is inside the bar
+/// strip; without this the menu overlaps the bar (too close), and any later
+/// re-layout lets the compositor re-constrain the overlapping popup off the bar —
+/// dropping its top and shrinking it. Positioning it a fixed gap clear of the bar
+/// (matching the dropdown panels) makes both the resting distance correct and the
+/// re-constrain unnecessary. Recomputed on every map and on reconcile; idempotent.
+fn realign_root(popover: &gtk::Popover, scale: f32) {
+    let Some(anchor) = popover.parent() else {
+        return;
+    };
+    let Some(bar) = anchor.root().and_downcast::<gtk::Window>() else {
+        return;
+    };
+    let Some(button) = anchor.compute_bounds(&bar) else {
+        return;
+    };
+
+    let (bar_w, bar_h) = (bar.width(), bar.height());
+    if bar_w <= 0 || bar_h <= 0 {
+        // Not yet allocated — leave GTK's default anchor; reconcile re-runs this.
+        return;
+    }
+
+    // Align to the bar SECTION's edge, not the bar window's edge. The sections are
+    // inset from the window by the bar padding (`.bar-section { margin }`), and a
+    // dropdown panel aligns to its `BarButton` which fills the section — so aligning
+    // to the section edge matches the dropdown gap; the window edge is one bar-
+    // padding too far (which made the menu sit lower than the panels). Default to
+    // the window edges if no `bar-section` ancestor is found.
+    let (mut sec_top, mut sec_bottom, mut sec_left, mut sec_right) = (0, bar_h, 0, bar_w);
+    let mut ancestor = anchor.parent();
+    while let Some(widget) = ancestor {
+        if widget.has_css_class("bar-section") {
+            if let Some(section) = widget.compute_bounds(&bar) {
+                sec_top = section.y().round() as i32;
+                sec_bottom = (section.y() + section.height()).round() as i32;
+                sec_left = section.x().round() as i32;
+                sec_right = (section.x() + section.width()).round() as i32;
+            }
+            break;
+        }
+        ancestor = widget.parent();
+    }
+
+    let gap = (ROOT_GAP_REM * REM_PX * scale).round() as i32;
+    let btn_top = button.y().round() as i32;
+    let btn_bottom = (button.y() + button.height()).round() as i32;
+    let btn_left = button.x().round() as i32;
+    let btn_right = (button.x() + button.width()).round() as i32;
+
+    // Shift the popover's bar-facing edge from the (short, bar-centred) tray button
+    // to the section's outer edge + gap, in the direction the menu opens (read from
+    // the bar window's location CSS class, like the dropdowns' position detection).
+    if bar.has_css_class("bottom") {
+        popover.set_offset(0, (sec_top - btn_top) - gap); // bottom bar: opens up
+    } else if bar.has_css_class("left") {
+        popover.set_offset((sec_right - btn_right) + gap, 0); // left bar: opens right
+    } else if bar.has_css_class("right") {
+        popover.set_offset((sec_left - btn_left) - gap, 0); // right bar: opens left
+    } else {
+        popover.set_offset(0, (sec_bottom - btn_bottom) + gap); // top bar: opens down
     }
 }
 

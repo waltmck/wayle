@@ -43,9 +43,15 @@ pub(crate) type KeyHandler = Rc<dyn Fn(gtk::gdk::Key) -> bool>;
 /// surface itself, so `handle_bar_click` must not pre-dismiss on press. Applied
 /// eagerly at construction by the bar factory (`BarItemFactory::init_widgets`) to a
 /// dropdown-capable module's outer widget; `handle_bar_click` only tests the mark.
-/// (The tray button is intentionally NOT marked — its left/middle-click activate
-/// should dismiss, and its right-click menu is opened by a separate gesture.)
 pub(crate) const OPENER_CSS_CLASS: &str = "dropdown-opener";
+
+/// CSS class marking a widget that opens a surface on the *secondary* (right)
+/// click only — the systray tray button, whose right-click toggles its menu but
+/// whose left/middle-click activate the app and should still dismiss any open
+/// surface. `handle_bar_click` treats it as an opener for secondary clicks only,
+/// so a right-click there defers to the item's own dip-free toggle instead of
+/// being pre-dismissed.
+pub(crate) const SECONDARY_OPENER_CSS_CLASS: &str = "dropdown-opener-secondary";
 
 struct OpenSurface {
     dismiss: DismissFn,
@@ -217,17 +223,22 @@ impl OpenSurfaceCoordinator {
     }
 
     /// Dismiss the open surface for a click on the bar at `target` (the picked
-    /// widget), unless the click landed on (or inside) a dropdown *opener* widget.
-    /// Openers carry the `dropdown-opener` CSS class (applied eagerly at construction
-    /// by the factory); they toggle/swap themselves dip-free via [`toggle`](Self::toggle),
-    /// so pre-dismissing their press would only cause a flash. Everything else —
-    /// empty bar, a workspace button, a tray icon — dismisses. This is the automatic
-    /// dismiss; modules never call `dismiss_current` for ordinary clicks.
-    pub(crate) fn handle_bar_click(&self, target: Option<&gtk::Widget>) {
+    /// widget), unless the click landed on (or inside) an *opener* widget. Openers
+    /// carry the `dropdown-opener` CSS class (applied eagerly at construction by the
+    /// factory); they toggle/swap themselves dip-free via [`toggle`](Self::toggle),
+    /// so pre-dismissing their press would only cause a flash. A `secondary` (right)
+    /// click additionally defers to a `dropdown-opener-secondary` widget (the tray
+    /// button, whose right-click opens its menu). Everything else — empty bar, a
+    /// workspace button, a left/middle-clicked tray icon — dismisses, so a click of
+    /// any button anywhere off an opener closes the open surface. This is the
+    /// automatic dismiss; modules never call `dismiss_current` for ordinary clicks.
+    pub(crate) fn handle_bar_click(&self, target: Option<&gtk::Widget>, secondary: bool) {
         let on_opener = target.is_some_and(|target| {
             let mut widget = Some(target.clone());
             while let Some(current) = widget {
-                if current.has_css_class(OPENER_CSS_CLASS) {
+                if current.has_css_class(OPENER_CSS_CLASS)
+                    || (secondary && current.has_css_class(SECONDARY_OPENER_CSS_CLASS))
+                {
                     return true;
                 }
                 widget = current.parent();

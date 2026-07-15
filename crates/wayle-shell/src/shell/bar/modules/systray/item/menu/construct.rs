@@ -1,12 +1,14 @@
-//! Builds the menu columns from the `wayle_systray` [`MenuItem`] tree and wires
-//! each column's popover (positioning, submenu alignment) and its rows
-//! (hover/click).
+//! Builds each menu column from the `wayle_systray` [`MenuItem`] tree, wires its
+//! popover (positioning, submenu alignment) and rows (hover/click), and — the
+//! reactive core — [`reconcile_column`] patches a built column in place when the
+//! layout changes, so the popover cascade is created once and never rebuilt while
+//! it lives.
 //!
-//! Every column is its own non-grab popover, built eagerly and parented to the
-//! row that owns it (the root to the tray button); it's popped up/down as the
-//! cascade opens and closes. There are no per-column key controllers: keyboard
-//! comes from the scrim, which holds keyboard while the menu is open and forwards
-//! keys to the deepest-open column (see `menu`'s `key_handler`/`handle_key`).
+//! Every column is its own non-grab popover parented to the row that owns it (the
+//! root to the tray button); it's popped up/down as the cascade opens and closes.
+//! There are no per-column key controllers: keyboard comes from the scrim/bar,
+//! which forward keys to the deepest-open column (see `menu`'s
+//! `key_handler`/`handle_key`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -18,25 +20,56 @@ use relm4::gtk::{self, prelude::*};
 use wayle_systray::types::menu::{Disposition, MenuItem, MenuItemType, ToggleState, ToggleType};
 
 use super::MenuInner;
-use super::column::{MenuColumn, MenuRow, RowKind};
+use super::column::{MenuColumn, MenuRow, RowActivation, RowKind};
 
-/// Fraction of the monitor height a column may occupy before it scrolls.
+/// Fraction of the monitor height a *submenu* column may occupy before it
+/// scrolls. Submenus open sideways from a row whose on-screen position isn't
+/// knowable across Wayland surfaces, so they fall back to a monitor fraction.
 const MAX_HEIGHT_FRACTION: f64 = 0.85;
 /// Used when the monitor geometry can't be read (surface not yet realized).
 const FALLBACK_MONITOR_HEIGHT: i32 = 1080;
+/// Gap kept between a column and the far monitor edge. `set_max_content_height`
+/// caps only the ScrolledWindow *content*, but the popover *surface* also carries
+/// frame chrome (CSS padding and border) that scales with the theme — up to
+/// ~20px at 2x. Subtracting this margin from the computed available space keeps
+/// content, chrome, and rounding together within what the compositor will grant;
+/// otherwise wlroots RESIZE/SLIDE-clamps the xdg_popup, dropping its top edge to
+/// the panel and clipping the last row. Erring large costs at most ~1 row of
+/// unused space, in exchange for a menu that fits never scrolling or clipping.
+const MENU_EDGE_MARGIN: i32 = 24;
+/// Floor so a menu opened from an oddly-placed anchor never collapses to nothing.
+const MIN_MENU_HEIGHT: i32 = 120;
 
-struct BuildCtx {
-    max_height: i32,
+/// The per-column height caps, computed once from the tray button's geometry and
+/// reused for every (re)build of a column — including submenu columns created
+/// during reconcile.
+#[derive(Clone, Copy)]
+pub(super) struct BuildCtx {
+    /// Cap for the root column: the real space on the menu's side of the bar, so
+    /// its natural height never exceeds what the compositor grants past the panel
+    /// (see [`root_available_height`]).
+    root_max_height: i32,
+    /// Cap for submenu columns — a monitor fraction (see [`MAX_HEIGHT_FRACTION`]).
+    submenu_max_height: i32,
 }
 
-/// Build the whole column tree, returning the root column. Its popover is
-/// parented to `tray_button`; submenu popovers hang off their owning row.
-pub(super) fn build_root(root_item: &MenuItem, tray_button: &gtk::Widget) -> Rc<MenuColumn> {
-    let ctx = BuildCtx {
-        max_height: monitor_max_height(tray_button),
-    };
+/// Compute the height caps from the tray button's on-screen geometry.
+pub(super) fn build_ctx(tray_button: &gtk::Widget) -> BuildCtx {
+    BuildCtx {
+        root_max_height: root_available_height(tray_button),
+        submenu_max_height: submenu_max_height(tray_button),
+    }
+}
+
+/// Build the root column, parenting its popover to `tray_button`; submenu popovers
+/// hang off their owning row and are built eagerly here too.
+pub(super) fn build_root(
+    ctx: &BuildCtx,
+    root_item: &MenuItem,
+    tray_button: &gtk::Widget,
+) -> Rc<MenuColumn> {
     build_column(
-        &ctx,
+        ctx,
         &root_item.children,
         0,
         Weak::new(),
@@ -69,11 +102,19 @@ fn build_column(
     popover.add_css_class("systray-menu");
     popover.set_parent(parent_widget);
 
+    // The root column is capped to the space on the menu's side of the bar; deeper
+    // (submenu) columns open sideways and use the monitor-fraction fallback.
+    let max_content_height = if depth == 0 {
+        ctx.root_max_height
+    } else {
+        ctx.submenu_max_height
+    };
+
     let scrolled = gtk::ScrolledWindow::new();
     scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scrolled.set_propagate_natural_height(true);
     scrolled.set_propagate_natural_width(true);
-    scrolled.set_max_content_height(ctx.max_height);
+    scrolled.set_max_content_height(max_content_height);
     scrolled.set_focusable(false);
     scrolled.add_css_class("systray-menu-column");
 
@@ -82,10 +123,12 @@ fn build_column(
     popover.set_child(Some(&scrolled));
 
     Rc::new_cyclic(|weak_self| {
-        let rows = populate(ctx, &list, children, depth, weak_self);
+        let (rows, separators) = populate(ctx, &list, children, depth, weak_self);
         MenuColumn {
             popover,
-            rows,
+            list,
+            rows: RefCell::new(rows),
+            separators: RefCell::new(separators),
             cursor: Cell::new(None),
             depth,
             open_child: RefCell::new(None),
@@ -94,14 +137,17 @@ fn build_column(
     })
 }
 
-fn populate(
-    ctx: &BuildCtx,
-    list: &gtk::Box,
-    children: &[MenuItem],
-    depth: usize,
-    parent: &Weak<MenuColumn>,
-) -> Vec<MenuRow> {
-    let mut rows = Vec::new();
+/// Applies the DBusMenu visibility + separator-collapsing rules to `children`,
+/// yielding the rows to render in visual order. Leading, trailing, and
+/// consecutive separators are collapsed into `sep_before` flags.
+struct RowPlan<'a> {
+    item: &'a MenuItem,
+    has_submenu: bool,
+    sep_before: bool,
+}
+
+fn plan_rows(children: &[MenuItem]) -> Vec<RowPlan<'_>> {
+    let mut plan = Vec::new();
     let mut has_items = false;
     let mut pending_separator = false;
 
@@ -109,51 +155,76 @@ fn populate(
         if !child.visible {
             continue;
         }
-
         if child.item_type == MenuItemType::Separator {
-            // Defer separators so leading, trailing, and consecutive ones never
-            // render.
             pending_separator = has_items;
             continue;
         }
-
-        if pending_separator {
-            list.append(&separator());
-            pending_separator = false;
-        }
-
         // A submenu row with no visible children degrades to a plain leaf.
         let has_submenu = child.has_children() && child.children.iter().any(|item| item.visible);
-        let button = build_button(child, has_submenu);
-        list.append(&button);
-
-        let kind = if has_submenu {
-            let child_column = build_column(
-                ctx,
-                &child.children,
-                depth + 1,
-                parent.clone(),
-                button.upcast_ref(),
-                gtk::PositionType::Right,
-            );
-            RowKind::Submenu {
-                column: child_column,
-            }
-        } else {
-            RowKind::Leaf { id: child.id }
-        };
-
-        rows.push(MenuRow {
-            button,
-            kind,
+        plan.push(RowPlan {
+            item: child,
+            has_submenu,
+            sep_before: pending_separator,
         });
+        pending_separator = false;
         has_items = true;
     }
 
-    rows
+    plan
 }
 
-fn build_button(item: &MenuItem, is_submenu: bool) -> gtk::Button {
+fn populate(
+    ctx: &BuildCtx,
+    list: &gtk::Box,
+    children: &[MenuItem],
+    depth: usize,
+    parent: &Weak<MenuColumn>,
+) -> (Vec<MenuRow>, Vec<gtk::Separator>) {
+    let mut rows = Vec::new();
+    let mut separators = Vec::new();
+
+    for plan in plan_rows(children) {
+        if plan.sep_before {
+            let sep = separator();
+            list.append(&sep);
+            separators.push(sep);
+        }
+        let row = build_row(ctx, &plan, depth, parent);
+        list.append(&row.button);
+        rows.push(row);
+    }
+
+    (rows, separators)
+}
+
+/// Build one row (button + content, plus its submenu column eagerly if it has
+/// one). Not yet added to any list or wired.
+fn build_row(ctx: &BuildCtx, plan: &RowPlan, depth: usize, parent: &Weak<MenuColumn>) -> MenuRow {
+    let (button, content) = build_button(plan.item, plan.has_submenu);
+
+    let kind = if plan.has_submenu {
+        let child = build_column(
+            ctx,
+            &plan.item.children,
+            depth + 1,
+            parent.clone(),
+            button.upcast_ref(),
+            gtk::PositionType::Right,
+        );
+        RowKind::Submenu { column: child }
+    } else {
+        RowKind::Leaf
+    };
+
+    MenuRow {
+        id: plan.item.id,
+        button,
+        content,
+        kind: RefCell::new(kind),
+    }
+}
+
+fn build_button(item: &MenuItem, is_submenu: bool) -> (gtk::Button, gtk::Box) {
     let button = gtk::Button::new();
     button.add_css_class("systray-menu-item-button");
     button.set_sensitive(item.enabled);
@@ -163,6 +234,16 @@ fn build_button(item: &MenuItem, is_submenu: bool) -> gtk::Button {
     // module's `key_handler`/`handle_key`).
     button.set_focusable(false);
 
+    let content = build_content(item, is_submenu);
+    button.set_child(Some(&content));
+    (button, content)
+}
+
+/// Build a row's content box (icon/indicator + label + submenu-arrow/accel). This
+/// is rebuilt wholesale by [`update_row`] on reconcile — cheap, and it reuses the
+/// enclosing button and (for submenu rows) the child popover cascade, which are
+/// the expensive parts.
+fn build_content(item: &MenuItem, is_submenu: bool) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     content.add_css_class("systray-menu-item");
     apply_disposition_class(&content, item.disposition);
@@ -196,20 +277,191 @@ fn build_button(item: &MenuItem, is_submenu: bool) -> gtk::Button {
         content.append(&accel);
     }
 
-    button.set_child(Some(&content));
-    button
+    content
 }
 
-/// Wire every column's popover (key controller, map/closed lifecycle) and its
-/// rows (hover/click). Recurses into submenu columns.
+// ---------------------------------------------------------------------------
+// Reconcile — patch a built column in place from a fresh child list.
+// ---------------------------------------------------------------------------
+
+/// Update `column` in place to match `new_children`, reusing the existing popover,
+/// buttons, and submenu columns. Rows are matched by position: overlapping rows
+/// are patched in place, surplus rows are removed, and new rows are appended — the
+/// common menu update (a toggle flip, a label/enabled change) touches only content
+/// boxes, never a popover. Recurses into built submenu columns. Position matching
+/// (rather than id matching) is deliberate: it is robust to apps that renumber,
+/// reuse, or zero their DBusMenu ids, and menu edits are overwhelmingly in-place
+/// property changes at stable positions.
+pub(super) fn reconcile_column(
+    inner: &Rc<MenuInner>,
+    column: &Rc<MenuColumn>,
+    new_children: &[MenuItem],
+) {
+    let plan = plan_rows(new_children);
+    let ctx = inner.ctx;
+    // Submenu columns to tear down / recurse into, collected under the rows borrow
+    // and processed after it drops — tearing down a submenu pops it down, which
+    // must not run while `rows` is borrowed.
+    let mut teardowns: Vec<Rc<MenuColumn>> = Vec::new();
+    // Borrow the children slices from `new_children` (which outlives this call)
+    // rather than cloning the MenuItem subtrees — a reconcile runs on every layout
+    // tick and the subtrees carry icon-data bytes. Only the `Rc<MenuColumn>` is
+    // cloned (a refcount bump), since it must outlive the `rows` borrow below.
+    let mut recurse: Vec<(Rc<MenuColumn>, &[MenuItem])> = Vec::new();
+
+    {
+        let mut rows = column.rows.borrow_mut();
+
+        // Drop surplus tail rows.
+        while rows.len() > plan.len() {
+            let Some(row) = rows.pop() else {
+                break;
+            };
+            column.list.remove(&row.button);
+            if let RowKind::Submenu { column: child } = row.kind.into_inner() {
+                teardowns.push(child);
+            }
+        }
+
+        // Patch overlapping rows; append any new tail rows.
+        for (index, plan) in plan.iter().enumerate() {
+            if index < rows.len() {
+                if let Some(orphan) = update_row(inner, &ctx, column, &mut rows[index], plan) {
+                    teardowns.push(orphan);
+                }
+            } else {
+                let row = build_row(&ctx, plan, column.depth, &Rc::downgrade(column));
+                column.list.append(&row.button);
+                wire_row(inner, column, &row);
+                if let RowKind::Submenu { column: child } = &*row.kind.borrow() {
+                    wire_columns(inner, child);
+                }
+                rows.push(row);
+            }
+        }
+
+        // Collect built submenu columns to reconcile after the borrow drops.
+        for (index, plan) in plan.iter().enumerate() {
+            if plan.has_submenu
+                && let RowKind::Submenu { column: child } = &*rows[index].kind.borrow()
+            {
+                recurse.push((child.clone(), plan.item.children.as_slice()));
+            }
+        }
+    }
+
+    for child in teardowns {
+        teardown_column(&child);
+    }
+
+    rederive_separators(column, &plan);
+
+    // Re-apply the selection by index (force the class on, since the row at that
+    // index may now be a different one after inserts/removes).
+    column.reselect(column.cursor.get());
+
+    for (child, children) in recurse {
+        reconcile_column(inner, &child, children);
+    }
+
+    // A visible submenu whose content height changed needs its top-alignment
+    // offset recomputed (it is a one-shot on map otherwise).
+    if column.depth > 0 && column.popover.is_visible() {
+        realign_submenu(&column.popover);
+    }
+}
+
+/// Patch a single existing row to match `plan`. Rebuilds the content box (cheap,
+/// keeps the button + any submenu column) and applies a Leaf<->Submenu transition.
+/// Returns a submenu column orphaned by a Submenu->Leaf transition, for the caller
+/// to tear down outside the `rows` borrow.
+fn update_row(
+    inner: &Rc<MenuInner>,
+    ctx: &BuildCtx,
+    column: &Rc<MenuColumn>,
+    row: &mut MenuRow,
+    plan: &RowPlan,
+) -> Option<Rc<MenuColumn>> {
+    row.id = plan.item.id;
+    row.button.set_sensitive(plan.item.enabled);
+
+    let content = build_content(plan.item, plan.has_submenu);
+    row.button.set_child(Some(&content));
+    row.content = content;
+
+    let currently_submenu = matches!(&*row.kind.borrow(), RowKind::Submenu { .. });
+
+    if plan.has_submenu && !currently_submenu {
+        // Leaf -> Submenu: build and wire a fresh child column (safe under the rows
+        // borrow — it is an independent surface and touches no shared state here).
+        let child = build_column(
+            ctx,
+            &plan.item.children,
+            column.depth + 1,
+            Rc::downgrade(column),
+            row.button.upcast_ref(),
+            gtk::PositionType::Right,
+        );
+        wire_columns(inner, &child);
+        *row.kind.borrow_mut() = RowKind::Submenu { column: child };
+        None
+    } else if !plan.has_submenu && currently_submenu {
+        // Submenu -> Leaf: orphan the child column for teardown after the borrow.
+        match std::mem::replace(&mut *row.kind.borrow_mut(), RowKind::Leaf) {
+            RowKind::Submenu { column: child } => Some(child),
+            RowKind::Leaf => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Drop all separators and re-insert them per `plan` (they carry no identity, so
+/// re-deriving is simpler and safer than diffing). Must run after the row buttons
+/// are in their final `list` positions.
+fn rederive_separators(column: &Rc<MenuColumn>, plan: &[RowPlan]) {
+    let mut separators = column.separators.borrow_mut();
+    for sep in separators.drain(..) {
+        column.list.remove(&sep);
+    }
+
+    let rows = column.rows.borrow();
+    for (index, plan) in plan.iter().enumerate() {
+        // `sep_before` is never set on the first row (leading separators collapse),
+        // so `index - 1` is always valid here.
+        if plan.sep_before
+            && let Some(prev) = index.checked_sub(1).and_then(|i| rows.get(i))
+        {
+            let sep = separator();
+            column.list.insert_child_after(&sep, Some(&prev.button));
+            separators.push(sep);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wiring — popover lifecycle + per-row hover/click.
+// ---------------------------------------------------------------------------
+
+/// Wire a column's popover and all its rows, recursing into submenu columns.
 pub(super) fn wire_columns(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>) {
     wire_popover(column);
-    wire_rows(inner, column);
 
-    for row in &column.rows {
-        if let RowKind::Submenu { column: child } = &row.kind {
-            wire_columns(inner, child);
+    let children: Vec<Rc<MenuColumn>> = {
+        let rows = column.rows.borrow();
+        for row in rows.iter() {
+            wire_row(inner, column, row);
         }
+        rows.iter()
+            .filter_map(|row| match &*row.kind.borrow() {
+                RowKind::Submenu { column } => Some(column.clone()),
+                RowKind::Leaf => None,
+            })
+            .collect()
+    };
+
+    for child in children {
+        wire_columns(inner, &child);
     }
 }
 
@@ -222,7 +474,7 @@ fn wire_popover(column: &Rc<MenuColumn>) {
         return;
     }
 
-    column.popover.connect_map(align_submenu_top);
+    column.popover.connect_map(realign_submenu);
 
     // When a submenu closes for any reason (Left/Escape, hovering away, or a
     // cascade dismiss), drop the parent's pointer to it so the state stays in
@@ -248,47 +500,76 @@ fn wire_popover(column: &Rc<MenuColumn>) {
     });
 }
 
-fn wire_rows(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>) {
-    for (index, row) in column.rows.iter().enumerate() {
-        let motion = gtk::EventControllerMotion::new();
-        motion.connect_enter({
-            let inner = Rc::downgrade(inner);
-            let column = Rc::downgrade(column);
-            move |_, _, _| {
-                if let (Some(inner), Some(column)) = (inner.upgrade(), column.upgrade()) {
-                    inner.hover_row(&column, index);
-                }
-            }
-        });
-        row.button.add_controller(motion);
-
-        match &row.kind {
-            RowKind::Leaf { id } => {
-                let id = *id;
-                let inner = Rc::downgrade(inner);
-                row.button.connect_clicked(move |_| {
-                    if let Some(inner) = inner.upgrade() {
-                        inner.activate_leaf(id);
-                    }
-                });
-            }
-            RowKind::Submenu { .. } => {
-                let inner = Rc::downgrade(inner);
-                let column = Rc::downgrade(column);
-                row.button.connect_clicked(move |_| {
-                    if let (Some(inner), Some(column)) = (inner.upgrade(), column.upgrade()) {
-                        inner.hover_row(&column, index);
-                    }
-                });
+/// Wire one row's hover + click controllers. The row's index is looked up by
+/// button identity at fire time (not captured), and its Leaf/Submenu action is
+/// read at fire time, so reconcile's insert/remove/reorder and Leaf<->Submenu
+/// transitions need no re-wiring.
+fn wire_row(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>, row: &MenuRow) {
+    let motion = gtk::EventControllerMotion::new();
+    motion.connect_enter({
+        let inner = Rc::downgrade(inner);
+        let column = Rc::downgrade(column);
+        let button = row.button.downgrade();
+        move |_, _, _| {
+            if let (Some(inner), Some(column), Some(button)) =
+                (inner.upgrade(), column.upgrade(), button.upgrade())
+                && let Some(index) = column.index_of_button(&button)
+            {
+                inner.hover_row(&column, index);
             }
         }
+    });
+    row.button.add_controller(motion);
+
+    row.button.connect_clicked({
+        let inner = Rc::downgrade(inner);
+        let column = Rc::downgrade(column);
+        let button = row.button.downgrade();
+        move |_| {
+            let (Some(inner), Some(column), Some(button)) =
+                (inner.upgrade(), column.upgrade(), button.upgrade())
+            else {
+                return;
+            };
+            let Some(index) = column.index_of_button(&button) else {
+                return;
+            };
+            match column.activation_at(index) {
+                Some(RowActivation::Leaf(id)) => inner.activate_leaf(id),
+                Some(RowActivation::Submenu) => inner.hover_row(&column, index),
+                None => {}
+            }
+        }
+    });
+}
+
+/// Unparent every popover in the cascade, deepest-first (submenus are parented to
+/// buttons inside their parent popover, so they must go before the parent).
+pub(super) fn teardown_column(column: &Rc<MenuColumn>) {
+    let children: Vec<Rc<MenuColumn>> = column
+        .rows
+        .borrow()
+        .iter()
+        .filter_map(|row| match &*row.kind.borrow() {
+            RowKind::Submenu { column } => Some(column.clone()),
+            RowKind::Leaf => None,
+        })
+        .collect();
+    for child in children {
+        teardown_column(&child);
     }
+
+    column.open_child.borrow_mut().take();
+    column.popover.popdown();
+    column.popover.set_child(gtk::Widget::NONE);
+    column.popover.unparent();
 }
 
 /// Offset a submenu popover so its top edge lines up with the top of the row it
 /// opened from, instead of GTK's default vertical centring on that row (which
-/// pushes tall submenus off the top of the screen).
-fn align_submenu_top(popover: &gtk::Popover) {
+/// pushes tall submenus off the top of the screen). Wired on `map` and re-run by
+/// reconcile when a visible submenu's height changes.
+fn realign_submenu(popover: &gtk::Popover) {
     let (Some(anchor), Some(content)) = (popover.parent(), popover.child()) else {
         return;
     };
@@ -303,16 +584,65 @@ fn align_submenu_top(popover: &gtk::Popover) {
     }
 }
 
-fn monitor_max_height(widget: &gtk::Widget) -> i32 {
-    let height = widget
-        .native()
-        .and_then(|native| native.surface())
-        .and_then(|surface| widget.display().monitor_at_surface(&surface))
-        .map(|monitor| monitor.geometry().height())
-        .filter(|height| *height > 0)
-        .unwrap_or(FALLBACK_MONITOR_HEIGHT);
+// ---------------------------------------------------------------------------
+// Geometry / small builders (unchanged).
+// ---------------------------------------------------------------------------
 
-    (f64::from(height) * MAX_HEIGHT_FRACTION) as i32
+/// The monitor height (logical px) the `anchor` sits on, the bar's thin
+/// dimension, and whether the bar is horizontal — everything the height caps
+/// need. `None` before the anchor's surface is realized.
+fn anchor_geometry(anchor: &gtk::Widget) -> Option<(i32, i32, bool)> {
+    let surface = anchor.native()?.surface()?;
+    let monitor_height = anchor
+        .display()
+        .monitor_at_surface(&surface)?
+        .geometry()
+        .height();
+    if monitor_height <= 0 {
+        return None;
+    }
+
+    let bar = anchor.root().and_downcast::<gtk::Window>()?;
+    let (bar_width, bar_height) = (bar.width(), bar.height());
+    // A bar is a thin strip: horizontal (top/bottom) when wider than tall. Its
+    // thin dimension is the extent it occupies along the axis the menu opens on.
+    let horizontal = bar_width >= bar_height;
+    let bar_thickness = bar_width.min(bar_height);
+
+    Some((monitor_height, bar_thickness, horizontal))
+}
+
+/// Max height for the *root* column: the space on the menu's side of the bar
+/// (monitor height minus the bar's strip for a top/bottom bar; nearly the whole
+/// monitor for a side bar), less a safety margin. Capping the ScrolledWindow to
+/// this keeps its natural height within what the compositor can grant, so the
+/// xdg_popup is never RESIZE/SLIDE-clamped — its top stays put and it scrolls
+/// only when the content genuinely can't fit (the true maximum). The value
+/// depends only on stable geometry, not the bar's transient layer state, so
+/// first-open and rebuild render identically. Works for a top *or* bottom bar
+/// (the space is symmetric: monitor minus the bar strip on either edge).
+fn root_available_height(anchor: &gtk::Widget) -> i32 {
+    let Some((monitor_height, bar_thickness, horizontal)) = anchor_geometry(anchor) else {
+        return (f64::from(FALLBACK_MONITOR_HEIGHT) * MAX_HEIGHT_FRACTION) as i32;
+    };
+
+    let available = if horizontal {
+        monitor_height - bar_thickness - MENU_EDGE_MARGIN
+    } else {
+        monitor_height - MENU_EDGE_MARGIN
+    };
+
+    available.clamp(MIN_MENU_HEIGHT, monitor_height - MENU_EDGE_MARGIN)
+}
+
+/// Max height for a *submenu* column. A submenu opens sideways from a row whose
+/// on-screen position can't be read across Wayland surfaces, so it falls back to
+/// a fraction of the monitor.
+fn submenu_max_height(anchor: &gtk::Widget) -> i32 {
+    let monitor_height =
+        anchor_geometry(anchor).map_or(FALLBACK_MONITOR_HEIGHT, |(height, _, _)| height);
+
+    (f64::from(monitor_height) * MAX_HEIGHT_FRACTION) as i32
 }
 
 fn separator() -> gtk::Separator {

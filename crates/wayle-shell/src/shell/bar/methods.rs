@@ -40,11 +40,11 @@ impl Bar {
     /// Keyboard: when the bar (or one of its popovers) holds focus, Escape closes the
     /// open surface and nav keys drive the systray menu's cascade — the scrim covers
     /// the same while the pointer is over the empty desktop; together they span every
-    /// pointer position. Click: any non-secondary click on the bar dismisses the open
-    /// dropdown/menu, EXCEPT a click on an opener widget (left to that opener's own
-    /// toggle/swap). This is THE automatic dismiss — modules never call
-    /// `dismiss_current` themselves; secondary (right) is reserved for opening context
-    /// menus/dropdowns (they manage their own dip-free swap).
+    /// pointer position. Click: any click on the bar — left, middle, OR right —
+    /// dismisses the open dropdown/menu, EXCEPT a click on an opener widget (left to
+    /// that opener's own toggle/swap). A right-click additionally defers to a
+    /// secondary-opener (the tray button, whose right-click opens its menu). This is
+    /// THE automatic dismiss — modules never call `dismiss_current` themselves.
     pub(super) fn install_dismiss_controllers(
         window: &gtk::Window,
         dropdowns: &Rc<DropdownRegistry>,
@@ -63,14 +63,12 @@ impl Bar {
             let coordinator = dropdowns.coordinator();
             let window = window.downgrade();
             move |gesture, _, x, y| {
-                if gesture.current_button() == gdk::BUTTON_SECONDARY {
-                    return;
-                }
+                let secondary = gesture.current_button() == gdk::BUTTON_SECONDARY;
                 let Some(window) = window.upgrade() else {
                     return;
                 };
                 let target = window.pick(x, y, gtk::PickFlags::DEFAULT);
-                coordinator.handle_bar_click(target.as_ref());
+                coordinator.handle_bar_click(target.as_ref(), secondary);
             }
         });
         window.add_controller(click_dismiss);

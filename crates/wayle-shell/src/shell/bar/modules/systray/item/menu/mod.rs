@@ -34,7 +34,7 @@ use wayle_systray::{
     types::menu::{MenuEvent, MenuItem},
 };
 
-use column::{MenuColumn, RowKind};
+use column::{MenuColumn, RowActivation};
 
 /// A built tray menu: the root column plus the shared controller state.
 pub(super) struct TrayMenu {
@@ -50,6 +50,9 @@ struct MenuInner {
     /// Suppresses the synthetic hover-enter GTK fires when a submenu pops up
     /// under a stationary pointer, so it can't fight a structural change.
     navigating: Cell<bool>,
+    /// The height caps, so reconcile can build submenu columns that appear at
+    /// runtime with the same sizing the initial build used.
+    ctx: construct::BuildCtx,
 }
 
 impl TrayMenu {
@@ -62,13 +65,17 @@ impl TrayMenu {
         self.root.popover.popup();
     }
 
-    pub(super) fn dismiss(&self) {
-        self.root.popover.popdown();
+    /// Patch the whole cascade in place from a fresh layout, reusing the popovers,
+    /// buttons, and submenu columns — no teardown, no surface churn. Safe whether
+    /// the menu is hidden or visible (a visible reconcile is the point: an
+    /// AboutToShow/LayoutUpdated change updates the open menu without a flicker).
+    pub(super) fn reconcile(&self, new_root: &MenuItem) {
+        construct::reconcile_column(&self.inner, &self.root, &new_root.children);
     }
 
     /// Unparent every popover, deepest-first.
     pub(super) fn teardown(&self) {
-        teardown_column(&self.root);
+        construct::teardown_column(&self.root);
     }
 
     /// The root popover, for the caller to hook `connect_closed` on.
@@ -99,12 +106,14 @@ impl TrayMenu {
 /// Build a menu for `item` rooted at `root_item`, parenting the root popover to
 /// `parent` (the tray button).
 pub(super) fn build(item: &Arc<TrayItem>, root_item: &MenuItem, parent: &gtk::Widget) -> TrayMenu {
-    let root = construct::build_root(root_item, parent);
+    let ctx = construct::build_ctx(parent);
+    let root = construct::build_root(&ctx, root_item, parent);
 
     let inner = Rc::new(MenuInner {
         item: item.clone(),
         root_popover: root.popover.clone(),
         navigating: Cell::new(false),
+        ctx,
     });
 
     construct::wire_columns(&inner, &root);
@@ -124,7 +133,7 @@ impl MenuInner {
         self.navigating.set(true);
         column.set_selected(Some(index));
         match column.submenu_at(index) {
-            Some(child) => column.open_child(child),
+            Some(child) => column.open_child(&child),
             None => column.close_open_child(),
         }
         self.navigating.set(false);
@@ -205,7 +214,7 @@ impl MenuInner {
         // Guard the structural change so the synthetic hover-crossing GTK fires
         // when a popover appears under a stationary pointer can't fight it.
         self.navigating.set(true);
-        column.open_child(child);
+        column.open_child(&child);
         child.set_selected(child.first_selectable());
         self.navigating.set(false);
     }
@@ -227,23 +236,10 @@ impl MenuInner {
         let Some(index) = column.cursor.get() else {
             return;
         };
-        match column.rows.get(index).map(|row| &row.kind) {
-            Some(RowKind::Leaf { id }) => self.activate_leaf(*id),
-            Some(RowKind::Submenu { .. }) => self.enter(column),
+        match column.activation_at(index) {
+            Some(RowActivation::Leaf(id)) => self.activate_leaf(id),
+            Some(RowActivation::Submenu) => self.enter(column),
             None => {}
         }
     }
-}
-
-/// Unparent every popover, deepest-first (submenus are parented to buttons
-/// inside their parent popover, so they must go before the parent).
-fn teardown_column(column: &Rc<MenuColumn>) {
-    for row in &column.rows {
-        if let RowKind::Submenu { column: child } = &row.kind {
-            teardown_column(child);
-        }
-    }
-    column.open_child.borrow_mut().take();
-    column.popover.set_child(gtk::Widget::NONE);
-    column.popover.unparent();
 }

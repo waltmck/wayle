@@ -5,40 +5,66 @@ use gtk4::prelude::StyleContextExt;
 use gtk4::gdk;
 use relm4::gtk::{self, prelude::*};
 use tracing::debug;
-use wayle_systray::types::Coordinates;
+use wayle_systray::types::{Coordinates, menu::MenuItem};
 
 use super::{
     SystrayItem, menu,
     helpers::{create_texture_from_pixmap, load_icon_from_theme_path, select_best_pixmap},
 };
 use crate::shell::{
-    bar::modules::systray::helpers::find_override, helpers::COMPONENT_CSS_PRIORITY,
+    bar::{dropdowns::DismissFn, modules::systray::helpers::find_override},
+    helpers::COMPONENT_CSS_PRIORITY,
 };
 
-impl SystrayItem {
-    /// Show this item's menu. `toggle`: if the menu is already visible, dismiss it
-    /// (right-click / `systray toggle`); when `false` (`systray open`), leave an
-    /// already-open menu untouched.
-    pub(super) fn request_menu_show(&mut self, toggle: bool) {
-        if let Some(menu) = self.menu.as_ref()
-            && menu.is_visible()
-        {
-            if toggle {
-                debug!(item_id = %self.item.id.get(), "hiding menu");
-                menu.dismiss();
-            }
-            return;
-        }
+/// A freshly built cascade plus the bookkeeping to show it and later release it:
+/// the tree it was built from (for the no-op-skip), its stable dismiss closure, and
+/// the `registered` flag its one-time `closed` handler flips.
+struct BuiltMenu {
+    menu: menu::TrayMenu,
+    tree: MenuItem,
+    dismiss: DismissFn,
+    registered: Rc<Cell<bool>>,
+}
 
-        // Show synchronously from the cached menu layout so the scrim's bar->overlay
-        // re-layer happens INSIDE the click event. Doing an async `AboutToShow`
-        // round-trip *before* showing re-layers the bar ~100ms later under a
-        // stationary pointer, which Hyprland won't re-focus — silently dropping the
-        // bar's pointer focus (the "two right-clicks lose focus" bug), and the async
-        // gap also needs coalescing to avoid a swallowed close. Instead refresh in
-        // the background; the menu watcher (`MenuUpdated` -> `rebuild_menu_if_visible`)
-        // rebuilds the open menu in place if the layout changed.
-        self.show_menu();
+impl SystrayItem {
+    /// Toggle/open this item's menu on click. `toggle`: right-click / `systray
+    /// toggle` (open if closed, close if open); `false` is `systray open`
+    /// (open-if-closed, no-op if already open).
+    ///
+    /// The open/close decision goes through the [`OpenSurfaceCoordinator`], keyed on
+    /// the tray button as the anchor — the same authority the dropdowns use — rather
+    /// than a transient `menu.is_visible()` check. That check could go stale between
+    /// the press that closed the menu (via the scrim) and the release that acted on
+    /// it, so a second right-click sometimes re-opened instead of staying closed.
+    /// The cascade is normally pre-built off the click path (by the menu watcher),
+    /// so opening only *presents* it; a click before the first layout arrives
+    /// cold-builds it (see [`show_menu`]).
+    pub(super) fn request_menu_show(&mut self, toggle: bool) {
+        let Some(button) = self.button.clone() else {
+            return;
+        };
+        let anchor: gtk::Widget = button.upcast();
+        // Clone the Rc so the open closure borrows only `self`, not `self.coordinator`.
+        let coordinator = self.coordinator.clone();
+
+        if toggle {
+            coordinator.toggle(&anchor, || self.present_or_show());
+        } else {
+            coordinator.open_only(&anchor, || self.present_or_show());
+        }
+    }
+
+    /// The coordinator's "open" action for this item: present the pre-built cascade
+    /// (or cold-build it), then kick off a background `AboutToShow` refresh — which
+    /// reconciles the menu in place if the app returns a changed layout. Runs only
+    /// when the coordinator decides to open (never on a toggle-off).
+    fn present_or_show(&mut self) {
+        if self.menu.is_some() {
+            self.present_cached();
+        } else {
+            // No cache yet (menu layout not received) — build and show now.
+            self.show_menu();
+        }
 
         let item = self.item.clone();
         tokio::spawn(async move {
@@ -48,86 +74,167 @@ impl SystrayItem {
         });
     }
 
-    // A cohesive linear sequence (guard → build → coordinator swap → wire → popup)
-    // whose steps must stay together; splitting it would fragment the swap bookkeeping.
-    #[allow(clippy::cognitive_complexity)]
-    fn show_menu(&mut self) {
-        let item_id = self.item.id.get();
-        debug!(item_id = %item_id, title = %self.item.title.get(), "show_menu called");
-
-        let menu_data = self.item.menu.get();
-        let Some(root_menu) = menu_data else {
-            debug!("no menu data, falling back");
-            self.spawn_context_menu_fallback();
-            return;
-        };
-
-        if root_menu.children.is_empty() {
-            debug!("empty menu, falling back");
-            self.spawn_context_menu_fallback();
+    /// Apply a layout change from the menu watcher, OFF the click path. Skips when
+    /// the layout is unchanged. If the cascade is already built, it is PATCHED IN
+    /// PLACE via [`menu::TrayMenu::reconcile`] — reusing every popover, button, and
+    /// submenu column — whether the menu is hidden or visible (a visible reconcile
+    /// is the point: an AboutToShow/LayoutUpdated change updates the open menu with
+    /// no flicker and no surface churn). If it isn't built yet, build it once and
+    /// cache it hidden. If the layout goes empty, drop the cache.
+    pub(super) fn rebuild_cached_menu(&mut self) {
+        let new_tree = self.item.menu.get();
+        if new_tree == self.displayed_menu {
             return;
         }
 
-        let Some(parent) = self.button.clone() else {
-            debug!("no parent button, cannot show menu");
-            return;
-        };
+        let has_content = new_tree
+            .as_ref()
+            .is_some_and(|root| !root.children.is_empty());
 
-        // Rebuild from scratch each time so the menu reflects the latest layout. Build
-        // the new cascade FIRST, then let the coordinator's `open` (show-before-close)
-        // swap it in: the open surface stays registered across the swap, so the scrim
-        // never dips to hidden and the bar is never re-layered mid-rebuild. Re-layering
-        // the bar under a stationary pointer is exactly what drops its pointer focus, so
-        // clearing the old registration first (which hides the scrim, then re-shows it)
-        // would reintroduce that on every layout-changing `AboutToShow` refresh.
-        let old_menu = self.menu.take();
-        let old_reg = self.menu_reg.take();
+        if self.menu.is_some() {
+            if has_content {
+                if let (Some(menu), Some(root)) = (self.menu.as_ref(), new_tree.as_ref()) {
+                    menu.reconcile(root);
+                }
+                self.displayed_menu = new_tree;
+            } else {
+                // Layout emptied/unavailable: drop the cache (dismiss it if open).
+                let visible = self.menu.as_ref().is_some_and(menu::TrayMenu::is_visible);
+                self.drop_cache(visible);
+            }
+        } else if has_content
+            && let Some(built) = self.build_cascade()
+        {
+            // First layout: build the persistent cascade once, hidden.
+            self.install(built);
+        }
+    }
+
+    /// Build the cascade for the current layout and install its one-time `closed`
+    /// handler, without showing it. `None` when there is no usable layout.
+    fn build_cascade(&self) -> Option<BuiltMenu> {
+        let root_menu = self.item.menu.get()?;
+        if root_menu.children.is_empty() {
+            return None;
+        }
+        let parent = self.button.clone()?;
 
         let menu = menu::build(&self.item, &root_menu, parent.upcast_ref());
         let dismiss = menu.dismiss_handle();
-        let cleaned = Rc::new(Cell::new(false));
-
-        // Register the new surface (its key handler drives the cascade from wherever
-        // keyboard focus sits; the tray button is its anchor). `open` closes the
-        // previous surface — the old menu, still the coordinator's `current` — under its
-        // dismissing guard, so the scrim stays shown across the swap.
-        let anchor = parent.upcast_ref::<gtk::Widget>().downgrade();
-        self.coordinator
-            .open(dismiss.clone(), Some(menu.key_handler()), Some(anchor));
-
-        // `open` already closed the old surface; mark its guard so its `connect_closed`
-        // is a no-op (the coordinator has moved on) and tear its now-hidden popovers down.
-        if let Some((_old_dismiss, old_cleaned)) = old_reg {
-            old_cleaned.set(true);
-        }
-        if let Some(old_menu) = old_menu {
-            old_menu.teardown();
-        }
-
+        // `registered` = "this menu is the coordinator's open surface, so closing it
+        // must notify the coordinator". Set true on each present; flipped false
+        // exactly once by whichever fires first — the popover's `closed` (a popdown)
+        // or an explicit teardown (`clear_menu_registration`, since `teardown`
+        // unparents without popping down). Installed once here, so reusing the cached
+        // popover across open/close cycles never stacks handlers.
+        let registered = Rc::new(Cell::new(false));
         menu.root_popover().connect_closed({
             let coordinator = self.coordinator.clone();
             let dismiss = dismiss.clone();
-            let cleaned = cleaned.clone();
+            let registered = registered.clone();
             move |_| {
-                if !cleaned.replace(true) {
+                if registered.replace(false) {
                     coordinator.notify_closed(&dismiss);
                 }
             }
         });
 
-        self.menu_reg = Some((dismiss, cleaned));
-        menu.popup();
-        self.menu = Some(menu);
+        Some(BuiltMenu {
+            menu,
+            tree: root_menu,
+            dismiss,
+            registered,
+        })
     }
 
-    /// Release the open menu's coordinator registration (which hides the scrim) if
-    /// the popover's `connect_closed` hasn't already done so. Needed because
-    /// `teardown` unparents without popping down, so `connect_closed` may not fire.
+    /// Present the already-built cached cascade: register it as the open surface
+    /// (closing any other, showing the scrim) and pop it up. No widget construction.
+    fn present_cached(&mut self) {
+        let Some(menu) = self.menu.as_ref() else {
+            return;
+        };
+        let Some((dismiss, registered)) = self.menu_reg.as_ref() else {
+            return;
+        };
+        let Some(parent) = self.button.clone() else {
+            return;
+        };
+
+        registered.set(true);
+        let anchor = parent.upcast_ref::<gtk::Widget>().downgrade();
+        // Register as the open surface FIRST — this closes any other open surface and
+        // establishes the scrim + bar->Overlay stacking (coordinator.open -> sync_scrim
+        // -> scrim.show raises the bar above the scrim) — THEN pop the menu up so it
+        // maps as a child of the already-raised bar and stacks ABOVE the scrim. This
+        // matches the dropdown open ceremony (registry.rs `open_on`); doing popup()
+        // first left the fresh popup stacked under the scrim on a switch (scrim over
+        // the bar), which then swallowed the next click. The needs-motion swap bug is
+        // still avoided because the scrim stays mapped across the swap (coordinator
+        // show-before-close), so a stationary pointer always has a live surface.
+        self.coordinator
+            .open(dismiss.clone(), Some(menu.key_handler()), Some(anchor));
+        menu.popup();
+    }
+
+    /// Cold path: a click arrived before the watcher cached the cascade (the app
+    /// hadn't sent a layout yet). Build it once, cache it, and present it — or fall
+    /// back to the app's own context menu when there's still no layout. Subsequent
+    /// opens hit the cache and go straight through `present_cached`.
+    fn show_menu(&mut self) {
+        match self.build_cascade() {
+            Some(built) => {
+                self.install(built);
+                self.present_cached();
+            }
+            None => {
+                debug!("no menu data, falling back");
+                self.spawn_context_menu_fallback();
+            }
+        }
+    }
+
+    /// Cache a freshly built cascade (hidden). Only called when there is no existing
+    /// cache — the persistent surface is built exactly once and thereafter updated
+    /// in place by [`rebuild_cached_menu`], never rebuilt.
+    fn install(&mut self, built: BuiltMenu) {
+        debug_assert!(
+            self.menu.is_none(),
+            "install replaces no surface; updates go through reconcile"
+        );
+        let BuiltMenu {
+            menu,
+            tree,
+            dismiss,
+            registered,
+        } = built;
+
+        self.menu = Some(menu);
+        self.menu_reg = Some((dismiss, registered));
+        self.displayed_menu = Some(tree);
+    }
+
+    /// Drop the cached cascade (the layout went empty/unavailable), dismissing it
+    /// first if it was open so a stale menu never lingers on screen.
+    fn drop_cache(&mut self, visible: bool) {
+        if visible {
+            self.coordinator.dismiss_current();
+        }
+        self.clear_menu_registration();
+        if let Some(old_menu) = self.menu.take() {
+            old_menu.teardown();
+        }
+        self.menu_reg = None;
+        self.displayed_menu = None;
+    }
+
+    /// Release the cached menu's coordinator registration (which hides the scrim) if
+    /// it is currently the open surface and its popover's `closed` hasn't already
+    /// done so — `teardown` unparents without popping down, so `closed` may not fire.
     pub(super) fn clear_menu_registration(&mut self) {
-        if let Some((dismiss, cleaned)) = self.menu_reg.take()
-            && !cleaned.replace(true)
+        if let Some((dismiss, registered)) = self.menu_reg.as_ref()
+            && registered.replace(false)
         {
-            self.coordinator.notify_closed(&dismiss);
+            self.coordinator.notify_closed(dismiss);
         }
     }
 
@@ -203,18 +310,5 @@ impl SystrayItem {
         }
 
         image.set_icon_name(Some("application-x-executable-symbolic"));
-    }
-
-    pub(super) fn rebuild_menu_if_visible(&mut self) {
-        let Some(menu) = self.menu.as_ref() else {
-            return;
-        };
-
-        if !menu.is_visible() {
-            return;
-        }
-
-        // Rebuild in place from the updated layout.
-        self.show_menu();
     }
 }

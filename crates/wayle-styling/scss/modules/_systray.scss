@@ -47,7 +47,8 @@
 
     // Each cascade column is its own popover, so its `contents` is naturally a
     // floating card (background/border/shadow from `popover-base`); no per-column
-    // card styling or transparency tricks are needed.
+    // card styling or transparency tricks are needed. (The card's drop shadow is
+    // overridden below — see the `popover.systray-menu > contents` rule.)
     > contents {
         min-width: calc(12rem * var(--global-scale));
         padding: var(--space-xs);
@@ -128,6 +129,30 @@
             margin: var(--space-xs) var(--space-sm);
         }
     }
+}
+
+// Shrink the systray menu's drop shadow to match the dropdown panels.
+//
+// The generic `popover.background > contents` rule in `base/` paints every popover
+// card with the big `--shadow` (0 8px 32px). GTK auto-adds the `.background` class to
+// popovers, so a plain `.systray-menu > contents` (specificity 0,1,1) can't override
+// it — the selector must match the popover element, `popover.systray-menu > contents`
+// (0,1,2), to tie `popover.background > contents` and win on source order (modules
+// load after base). This is the same trick `popover.dropdown` uses.
+//
+// Beyond matching the panels visually, the small shadow fixes a layout bug: the big
+// shadow's ~24px TOP ink extent is reserved INSIDE the xdg_popup surface, so a menu
+// anchored just under a bar had its surface top pushed past the monitor edge — the
+// compositor then RESIZE-clamped the popup on the next re-present (any sibling
+// relayout), dropping the menu's top edge in a one-way latch. The small, mostly-
+// downward shadow's tiny top extent keeps the surface top on-screen. Shadow value
+// matches `primitives/dropdown`. Overriding only `box-shadow` leaves the card's
+// padding — and thus the submenu flush offset (`SUBMENU_FLUSH_REM`) — unchanged.
+popover.systray-menu > contents {
+    box-shadow:
+        0 0px 5px rgba(0, 0, 0, 0.3),
+        0 4px 10px rgba(0, 0, 0, 0.3),
+        0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 .systray-menu-content {

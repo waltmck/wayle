@@ -204,6 +204,49 @@ impl MenuColumn {
         })
     }
 
+    /// Move `steps` sensitive rows down (positive) or up (negative) from `current`,
+    /// clamping at the ends WITHOUT wrapping and skipping insensitive rows — backs the
+    /// half/full-page motions (Ctrl-D/U/F/B). `None` starts just past the near edge
+    /// (top for a downward step, bottom for an upward one), so a page motion from an
+    /// unselected menu jumps into the list. Returns `None` if there are no sensitive
+    /// rows.
+    pub(super) fn step_by(&self, current: Option<usize>, steps: i32) -> Option<usize> {
+        let rows = self.rows.borrow();
+        let sensitive: Vec<usize> = (0..rows.len())
+            .filter(|&index| rows[index].button.is_sensitive())
+            .collect();
+        let len = sensitive.len();
+        if len == 0 {
+            return None;
+        }
+        let pos = current
+            .and_then(|cur| sensitive.iter().position(|&index| index == cur))
+            .map_or(if steps >= 0 { -1 } else { len as isize }, |p| p as isize);
+        let target = (pos + isize::try_from(steps).unwrap_or(0)).clamp(0, len as isize - 1) as usize;
+        Some(sensitive[target])
+    }
+
+    /// How many rows are visible in the scroll viewport at once — `floor(viewport
+    /// height / row height)` — sizing the page-motion jumps. Falls back to 1 before the
+    /// column has been allocated (or has no measurable row), so a motion always moves.
+    pub(super) fn page_rows(&self) -> usize {
+        let Some(scrolled) = self.popover.child().and_downcast::<gtk::ScrolledWindow>() else {
+            return 1;
+        };
+        let viewport = scrolled.vadjustment().page_size();
+        let row_height = self
+            .rows
+            .borrow()
+            .iter()
+            .map(|row| row.button.height())
+            .find(|&height| height > 0)
+            .unwrap_or(0);
+        if row_height <= 0 || viewport <= 0.0 {
+            return 1;
+        }
+        ((viewport / f64::from(row_height)).floor() as usize).max(1)
+    }
+
     /// Scroll this column so row `index` is visible (keyboard nav can land on a
     /// row currently scrolled out of view in a tall column, e.g. a country list).
     pub(super) fn scroll_into_view(&self, index: usize) {

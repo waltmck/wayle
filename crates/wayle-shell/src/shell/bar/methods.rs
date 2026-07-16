@@ -53,7 +53,7 @@ impl Bar {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.connect_key_pressed({
             let coordinator = dropdowns.coordinator();
-            move |_, keyval, _, _| coordinator.handle_key_event(keyval)
+            move |_, keyval, _, state| coordinator.handle_key_event(keyval, state)
         });
         window.add_controller(keys);
 

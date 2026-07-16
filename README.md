@@ -20,8 +20,9 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
 - Pointer cursor on hover over workspace buttons, matching other clickable elements in the shell. [#326](https://github.com/wayle-rs/wayle/pull/326)
 - Redesigned and refactor dropdown menus: switched from autohide popovers to a full-screen transparent scrim, similar to Astal/AGS and eww. [#328](https://github.com/wayle-rs/wayle/pull/328)
   - Fixes [#62](https://github.com/wayle-rs/wayle/issues/62) and [#285](https://github.com/wayle-rs/wayle/issues/285)
-  - Fully scrollable and arrow key navigable systray dropdows.
-  - Allows switching between dropdown menus with a single click, rather than having to click twice (one to close the existing menu and one to open the next one).
+  - Fully scrollable and arrow key (and `hjkl`) navigable systray dropdows.
+  - More responsive systray dropdowns from pre-building on registration rather than rebuilding whenever they are opened.
+  - Allow switching between dropdown menus with a single click, rather than having to click twice (one to close the existing menu and one to open the next one).
   - The bar and dropdown will stay on top of full-screen apps when there is a dropdown open
   - CLI dispatchers to open, close, and toggle dropdown menus:
     - `wayle dropdown list` lists available dropdown menus. These are addressed by IDs `dropdown@parent-module`, i.e. `weather@clock` vs `calendar@clock`; duplicates are numbered left to right (i.e. `dashboard@dashboard#1` vs `dashboard@dashboard#2`). The list is live-updated from the configuration (any module with a `dropdown:<name>` action).

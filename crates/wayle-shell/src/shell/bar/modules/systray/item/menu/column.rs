@@ -160,6 +160,14 @@ impl MenuColumn {
         }
     }
 
+    /// The index of the row whose submenu is `child` (by column identity), so Left can
+    /// select the entry that owns a submenu column when ascending to it.
+    pub(super) fn index_of_submenu(&self, child: &Rc<MenuColumn>) -> Option<usize> {
+        self.rows.borrow().iter().position(|row| {
+            matches!(&*row.kind.borrow(), RowKind::Submenu { column } if Rc::ptr_eq(column, child))
+        })
+    }
+
     /// First sensitive row (keyboard nav entry point), or `None` if the column
     /// has no selectable rows.
     pub(super) fn first_selectable(&self) -> Option<usize> {

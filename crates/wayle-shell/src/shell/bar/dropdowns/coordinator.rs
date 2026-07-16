@@ -212,8 +212,11 @@ impl OpenSurfaceCoordinator {
 
     /// Whether the currently-open surface is anchored to `anchor` (a plain
     /// widget-identity comparison against `OpenSurface.anchor`). Computed in a `let`
-    /// so the `current` borrow is dropped before any follow-up open/dismiss.
-    fn on_same_anchor(&self, anchor: &gtk::Widget) -> bool {
+    /// so the `current` borrow is dropped before any follow-up open/dismiss. Note
+    /// this identifies the *anchor*, not which surface — a module with several
+    /// dropdowns on one button shares an anchor, so callers that must distinguish
+    /// them combine this with the surface's own open-state (see `DropdownInstance`).
+    pub(crate) fn on_same_anchor(&self, anchor: &gtk::Widget) -> bool {
         self.current
             .borrow()
             .as_ref()

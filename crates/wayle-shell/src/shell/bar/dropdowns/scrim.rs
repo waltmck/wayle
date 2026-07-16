@@ -118,7 +118,10 @@ impl Scrim {
         let catcher = gtk::Box::new(gtk::Orientation::Vertical, 0);
         catcher.set_hexpand(true);
         catcher.set_vexpand(true);
-        let click = gtk::GestureClick::new();
+        // `button(0)` = listen to every button (GtkGestureSingle defaults to primary
+        // only): a right/middle-click on the empty desktop dismisses too, matching the
+        // bar's any-button dismiss.
+        let click = gtk::GestureClick::builder().button(0).build();
         click.connect_pressed({
             let coordinator = Rc::downgrade(coordinator);
             move |gesture, _, _, _| {

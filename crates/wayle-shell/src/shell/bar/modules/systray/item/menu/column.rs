@@ -5,6 +5,12 @@
 //! Each column is an independent non-grab popover, so the cascade positions,
 //! flips, and scrolls per surface, and each is naturally its own floating card.
 //! The menu is mouse-driven; the `.selected` CSS class is the hover highlight.
+//!
+//! The column is built once and then updated in place by
+//! [`construct::reconcile_column`](super::construct): `rows`, each row's `kind`,
+//! and the `list`'s children are interior-mutable so a menu-layout change patches
+//! the existing widgets instead of recreating the popover — the cascade surface is
+//! never rebuilt while it lives.
 
 use std::{
     cell::{Cell, RefCell},
@@ -18,10 +24,18 @@ pub(super) struct MenuColumn {
     /// This column's popover surface (parented to the owning row button, or the
     /// tray button for the root).
     pub(super) popover: gtk::Popover,
-    /// Rows in visual order (separators are appended to the list box but are not
-    /// entries here).
-    pub(super) rows: Vec<MenuRow>,
-    /// Index of the hovered row, or `None`.
+    /// The vertical list box inside the scroller, holding the row buttons and the
+    /// separators between them. Reconcile appends/inserts/removes children here.
+    pub(super) list: gtk::Box,
+    /// Rows in visual order (separators are in `list` but are tracked separately in
+    /// `separators`, not here). Interior-mutable so reconcile can update/insert/
+    /// remove rows without recreating the column.
+    pub(super) rows: RefCell<Vec<MenuRow>>,
+    /// The separator widgets currently in `list`. Separators carry no menu-item
+    /// identity, so reconcile drops and re-derives them wholesale rather than
+    /// diffing.
+    pub(super) separators: RefCell<Vec<gtk::Separator>>,
+    /// Index of the hovered/selected row, or `None`.
     pub(super) cursor: Cell<Option<usize>>,
     /// Depth in the cascade; `0` is the root column.
     pub(super) depth: usize,
@@ -32,32 +46,59 @@ pub(super) struct MenuColumn {
     pub(super) parent: Weak<MenuColumn>,
 }
 
-/// A menu row: a button plus what activating it does.
+/// A menu row: a button, its content box (patched in place), and what activating
+/// it does.
 pub(super) struct MenuRow {
+    /// The DBusMenu item id this row renders. Used for leaf activation; reconcile
+    /// matches rows by position (not id), so a non-unique id is harmless here.
+    pub(super) id: i32,
     pub(super) button: gtk::Button,
-    pub(super) kind: RowKind,
+    /// The horizontal content box (icon/indicator + label + submenu-arrow/accel),
+    /// updated in place by reconcile.
+    pub(super) content: gtk::Box,
+    /// Interior-mutable so a row can transition Leaf<->Submenu on reconcile.
+    pub(super) kind: RefCell<RowKind>,
 }
 
 pub(super) enum RowKind {
-    Leaf { id: i32 },
+    Leaf,
     Submenu { column: Rc<MenuColumn> },
+}
+
+/// What activating a row does, resolved at click/keyboard time.
+pub(super) enum RowActivation {
+    Leaf(i32),
+    Submenu,
 }
 
 impl MenuColumn {
     /// Move the `.selected` (hover) marker to `next` (or clear it when `None`).
+    /// Early-returns when the index is unchanged, so it is cheap on repeated hover.
     pub(super) fn set_selected(&self, next: Option<usize>) {
         let previous = self.cursor.replace(next);
         if previous == next {
             return;
         }
-        if let Some(index) = previous
-            && let Some(row) = self.rows.get(index)
-        {
+        let rows = self.rows.borrow();
+        if let Some(row) = previous.and_then(|index| rows.get(index)) {
             row.button.remove_css_class("selected");
         }
-        if let Some(index) = next
-            && let Some(row) = self.rows.get(index)
-        {
+        if let Some(row) = next.and_then(|index| rows.get(index)) {
+            row.button.add_css_class("selected");
+        }
+    }
+
+    /// Force `.selected` onto exactly the row at `index` (or clear it), bypassing
+    /// [`set_selected`](Self::set_selected)'s unchanged-index early-return. Used
+    /// after a reconcile, where the row at a given index may have changed identity
+    /// (so the class must be re-applied even when the numeric index is unchanged).
+    pub(super) fn reselect(&self, index: Option<usize>) {
+        let rows = self.rows.borrow();
+        for row in rows.iter() {
+            row.button.remove_css_class("selected");
+        }
+        self.cursor.set(index.filter(|&i| i < rows.len()));
+        if let Some(row) = self.cursor.get().and_then(|index| rows.get(index)) {
             row.button.add_css_class("selected");
         }
     }
@@ -89,11 +130,33 @@ impl MenuColumn {
         }
     }
 
+    /// The index of the row whose button is `button`, by widget identity. Row
+    /// handlers look their index up at fire time (rather than capturing it) so
+    /// reconcile's insert/remove/reorder can't leave a handler pointing at the
+    /// wrong row.
+    pub(super) fn index_of_button(&self, button: &gtk::Button) -> Option<usize> {
+        self.rows
+            .borrow()
+            .iter()
+            .position(|row| &row.button == button)
+    }
+
+    /// The activation for row `index`, read at fire time so a Leaf<->Submenu
+    /// transition on reconcile is reflected without re-wiring the button.
+    pub(super) fn activation_at(&self, index: usize) -> Option<RowActivation> {
+        let rows = self.rows.borrow();
+        let row = rows.get(index)?;
+        Some(match &*row.kind.borrow() {
+            RowKind::Leaf => RowActivation::Leaf(row.id),
+            RowKind::Submenu { .. } => RowActivation::Submenu,
+        })
+    }
+
     /// The submenu column owned by row `index`, if that row is a submenu.
-    pub(super) fn submenu_at(&self, index: usize) -> Option<&Rc<MenuColumn>> {
-        match self.rows.get(index)?.kind {
-            RowKind::Submenu { ref column } => Some(column),
-            RowKind::Leaf { .. } => None,
+    pub(super) fn submenu_at(&self, index: usize) -> Option<Rc<MenuColumn>> {
+        match &*self.rows.borrow().get(index)?.kind.borrow() {
+            RowKind::Submenu { column } => Some(column.clone()),
+            RowKind::Leaf => None,
         }
     }
 
@@ -106,35 +169,38 @@ impl MenuColumn {
     /// Next sensitive row after `current` (wrapping); starts at row 0 when
     /// `current` is `None`. Skips insensitive (disabled) rows.
     pub(super) fn next_from(&self, current: Option<usize>) -> Option<usize> {
-        let count = self.rows.len();
+        let rows = self.rows.borrow();
+        let count = rows.len();
         if count == 0 {
             return None;
         }
         let start = current.map_or(0, |index| (index + 1) % count);
         (0..count).find_map(|offset| {
             let index = (start + offset) % count;
-            self.rows[index].button.is_sensitive().then_some(index)
+            rows[index].button.is_sensitive().then_some(index)
         })
     }
 
     /// Previous sensitive row before `current` (wrapping); starts at the last row
     /// when `current` is `None`. Skips insensitive (disabled) rows.
     pub(super) fn prev_from(&self, current: Option<usize>) -> Option<usize> {
-        let count = self.rows.len();
+        let rows = self.rows.borrow();
+        let count = rows.len();
         if count == 0 {
             return None;
         }
         let start = current.map_or(count - 1, |index| (index + count - 1) % count);
         (0..count).find_map(|offset| {
             let index = (start + count - offset) % count;
-            self.rows[index].button.is_sensitive().then_some(index)
+            rows[index].button.is_sensitive().then_some(index)
         })
     }
 
     /// Scroll this column so row `index` is visible (keyboard nav can land on a
     /// row currently scrolled out of view in a tall column, e.g. a country list).
     pub(super) fn scroll_into_view(&self, index: usize) {
-        let Some(row) = self.rows.get(index) else {
+        let rows = self.rows.borrow();
+        let Some(row) = rows.get(index) else {
             return;
         };
         let Some(scrolled) = self.popover.child().and_downcast::<gtk::ScrolledWindow>() else {

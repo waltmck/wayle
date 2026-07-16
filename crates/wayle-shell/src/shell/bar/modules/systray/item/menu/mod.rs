@@ -19,8 +19,10 @@
 //! pointer or keyboard (see [`MenuInner::select`]): the mouse selects whatever entry
 //! it moves over, and otherwise the keyboard has priority (Up/Down move within the
 //! entry's column, Right descends into its submenu, Left ascends to the entry that
-//! owns the column; vim `h`/`j`/`k`/`l` are accepted as aliases for the arrows). The
-//! selected entry is shown with its submenu; the selection is a `.selected` CSS class.
+//! owns the column; vim `h`/`j`/`k`/`l` alias the arrows, `gg`/`G` jump to the
+//! top/bottom, and Ctrl+`d`/`u`/`f`/`b` page the selection — see
+//! [`MenuInner::handle_key`]). The selected entry is shown with its submenu; the
+//! selection is a `.selected` CSS class.
 //!
 //! Submodules: [`column`] (one column: popover + rows + cursor + open child) and
 //! [`construct`] (build + wire).
@@ -76,6 +78,9 @@ struct MenuInner {
     /// physically moves (unlike a row's local x/y, which shift as the row
     /// scrolls/relayouts). Only a real move clears `keyboard_nav`.
     pointer_pos: Cell<Option<(f64, f64)>>,
+    /// Set after a lone `g`, so the next key completes a vim `gg` (go-to-top) if it is
+    /// a second `g`. Any other key clears it. Reset when the menu opens fresh.
+    pending_g: Cell<bool>,
     /// The height caps, so reconcile can build submenu columns that appear at
     /// runtime with the same sizing the initial build used.
     ctx: construct::BuildCtx,
@@ -122,10 +127,10 @@ impl TrayMenu {
     /// A key handler for the coordinator: nav keys forwarded from the bar/scrim
     /// (whichever holds keyboard focus) drive the cascade. Returns `true` when the
     /// key was consumed.
-    pub(super) fn key_handler(&self) -> Rc<dyn Fn(gtk::gdk::Key) -> bool> {
+    pub(super) fn key_handler(&self) -> Rc<dyn Fn(gtk::gdk::Key, gtk::gdk::ModifierType) -> bool> {
         let inner = self.inner.clone();
         let root = self.root.clone();
-        Rc::new(move |key| inner.handle_key(&root, key))
+        Rc::new(move |key, state| inner.handle_key(&root, key, state))
     }
 }
 
@@ -150,6 +155,7 @@ pub(super) fn build(
         keyboard_nav: Cell::new(false),
         selected: RefCell::new(None),
         pointer_pos: Cell::new(None),
+        pending_g: Cell::new(false),
         ctx,
     });
 
@@ -239,24 +245,62 @@ impl MenuInner {
             prev_column.set_selected(None);
         }
         *self.selected.borrow_mut() = None;
+        self.pending_g.set(false);
         root.close_open_child();
         root.set_selected(None);
     }
 
-    /// Dispatch a forwarded nav key against the selected entry (or the root when
-    /// nothing is selected yet). Up/Down (or vim `k`/`j`) move the selection within its
-    /// column, Right (`l`) descends into its submenu, Left (`h`) ascends to the entry
-    /// that owns its column, Enter/Space activate, Escape dismisses. Escape is normally
-    /// intercepted by the bar/scrim (`dismiss_current`) before it reaches here, but
-    /// handling it too is harmless.
-    fn handle_key(&self, root: &Rc<MenuColumn>, key: gtk::gdk::Key) -> bool {
+    /// Dispatch a forwarded nav key (with its modifier `state`) against the selected
+    /// entry (or the root when nothing is selected yet).
+    ///
+    /// - Up/Down (vim `k`/`j`) move within the column; Right (`l`) descends into the
+    ///   submenu; Left (`h`) ascends to the entry that owns the column.
+    /// - `gg` jumps to the top of the column, Shift+`G` to the bottom.
+    /// - Ctrl+`d`/`u` move a half page down/up and Ctrl+`f`/`b` a full page, clamped to
+    ///   the ends (no wrap); a "page" is how many rows fit in the visible viewport.
+    /// - Enter/Space activate; Escape dismisses (normally already intercepted by the
+    ///   bar/scrim's `dismiss_current`, but handling it here too is harmless).
+    ///
+    /// Every motion sets `keyboard_nav`, which stops the synthetic hover-enter GTK
+    /// fires when `scroll_into_view` slides a row under a stationary pointer from
+    /// snapping the selection off the keyboard cursor (until the next real pointer
+    /// move).
+    fn handle_key(
+        &self,
+        root: &Rc<MenuColumn>,
+        key: gtk::gdk::Key,
+        state: gtk::gdk::ModifierType,
+    ) -> bool {
         use gtk::gdk::Key;
 
         let (column, index) = self.active(root);
+        // A leading `g` armed the previous keypress; consume the arming now — only a
+        // second `g` (matched below) completes `gg`; every other key just clears it.
+        let pending_g = self.pending_g.replace(false);
+
+        // Ctrl page motions: half page (d/u) or full page (f/b), down (+) or up (−),
+        // clamped to the ends without wrapping. Any other Ctrl combo falls through to
+        // be handled (or ignored) as if unmodified.
+        if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+            let full = i32::try_from(column.page_rows()).unwrap_or(1);
+            let half = (full / 2).max(1);
+            let steps = match key {
+                Key::d => Some(half),
+                Key::u => Some(-half),
+                Key::f => Some(full),
+                Key::b => Some(-full),
+                _ => None,
+            };
+            if let Some(steps) = steps {
+                self.keyboard_nav.set(true);
+                if let Some(target) = column.step_by(index, steps) {
+                    self.select(&column, target, true);
+                }
+                return true;
+            }
+        }
+
         match key {
-            // Keyboard is driving: `keyboard_nav` stops a synthetic hover-enter (from
-            // scroll_into_view sliding a row under a stationary pointer) snapping the
-            // selection off the keyboard cursor, until the next real pointer move.
             // Vim keys (h/j/k/l) are accepted as aliases for the arrows and behave
             // identically.
             Key::Down | Key::j => {
@@ -269,6 +313,23 @@ impl MenuInner {
                 self.keyboard_nav.set(true);
                 if let Some(prev) = column.prev_from(index) {
                     self.select(&column, prev, true);
+                }
+            }
+            // `gg` — go to the top. The first `g` only arms (next arm); this fires on
+            // the second consecutive `g`.
+            Key::g if pending_g => {
+                self.keyboard_nav.set(true);
+                if let Some(top) = column.first_selectable() {
+                    self.select(&column, top, true);
+                }
+            }
+            // Lone `g`: arm the `gg` sequence and wait for the next key.
+            Key::g => self.pending_g.set(true),
+            // Shift+`G` — go to the bottom.
+            Key::G => {
+                self.keyboard_nav.set(true);
+                if let Some(bottom) = column.prev_from(None) {
+                    self.select(&column, bottom, true);
                 }
             }
             Key::Right | Key::l => self.enter(&column, index),

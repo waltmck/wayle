@@ -142,11 +142,11 @@ impl Scrim {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.connect_key_pressed({
             let coordinator = Rc::downgrade(coordinator);
-            move |_, keyval, _, _| {
+            move |_, keyval, _, state| {
                 coordinator
                     .upgrade()
                     .map_or(gtk::glib::Propagation::Proceed, |coordinator| {
-                        coordinator.handle_key_event(keyval)
+                        coordinator.handle_key_event(keyval, state)
                     })
             }
         });

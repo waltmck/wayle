@@ -36,8 +36,9 @@ use super::scrim::Scrim;
 /// A currently-open dismissable surface, as a closure that closes it.
 pub(crate) type DismissFn = Rc<dyn Fn()>;
 
-/// Consumes a forwarded key for the open surface; returns `true` when handled.
-pub(crate) type KeyHandler = Rc<dyn Fn(gtk::gdk::Key) -> bool>;
+/// Consumes a forwarded key (with its modifier state) for the open surface; returns
+/// `true` when handled.
+pub(crate) type KeyHandler = Rc<dyn Fn(gtk::gdk::Key, gtk::gdk::ModifierType) -> bool>;
 
 /// CSS class marking a widget as a dropdown *opener* — clicking it toggles a
 /// surface itself, so `handle_bar_click` must not pre-dismiss on press. Applied
@@ -257,23 +258,28 @@ impl OpenSurfaceCoordinator {
     /// returns `true` if consumed. Clones the handler out before calling so no
     /// borrow is held across a re-entrant close (activation/Escape pops the menu
     /// down, which clears `current`).
-    pub(crate) fn handle_key(&self, key: gtk::gdk::Key) -> bool {
+    pub(crate) fn handle_key(&self, key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
         let handler = self
             .current
             .borrow()
             .as_ref()
             .and_then(|open| open.keys.clone());
-        handler.is_some_and(|handler| handler(key))
+        handler.is_some_and(|handler| handler(key, state))
     }
 
     /// The single Escape/nav-key policy for both key controllers (bar window and
-    /// scrim): Escape dismisses the open surface, other keys drive the systray
-    /// menu's nav. Returns the propagation the controller should report.
-    pub(crate) fn handle_key_event(&self, key: gtk::gdk::Key) -> gtk::glib::Propagation {
+    /// scrim): Escape dismisses the open surface, other keys (with their modifier
+    /// state, for the menu's Ctrl page motions) drive the systray menu's nav. Returns
+    /// the propagation the controller should report.
+    pub(crate) fn handle_key_event(
+        &self,
+        key: gtk::gdk::Key,
+        state: gtk::gdk::ModifierType,
+    ) -> gtk::glib::Propagation {
         let handled = if key == gtk::gdk::Key::Escape {
             self.dismiss_current()
         } else {
-            self.handle_key(key)
+            self.handle_key(key, state)
         };
         if handled {
             gtk::glib::Propagation::Stop

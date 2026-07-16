@@ -154,8 +154,12 @@
     // `--fg-on-accent` (near-black, meant for light accent fills) over a dark
     // hover bg, and — via the descendant combinator — leaked into the submenu
     // popover parented onto this button, blackening every row there too.
-    // `.selected` is the keyboard/hover cursor, kept visually identical to hover.
-    &:hover,
+    //
+    // `.selected` is the SOLE cursor highlight — `hover_row` sets it on mouse-hover
+    // and keyboard nav moves it. Deliberately not `:hover`: during keyboard nav the
+    // row under a stationary pointer is not `.selected` (hover is suppressed), so it
+    // stays unhighlighted and only the keyboard cursor shows. Mouse-hover still
+    // highlights, because `hover_row` adds `.selected` to the hovered row.
     &.selected {
         background: var(--bg-overlay);
     }

@@ -119,9 +119,13 @@ impl SystrayItem {
         }
         let parent = self.button.clone()?;
 
-        // Bar scale sizes the root menu's bar-gap offset to match the dropdown panels.
-        let scale = self.config.config().bar.scale.get().value();
-        let menu = menu::build(&self.item, &root_menu, parent.upcast_ref(), scale);
+        // Bar scale sizes the root menu's bar-gap offset (to match the dropdown
+        // panels); styling scale sizes the submenu flush offset (to match the panel's
+        // `space-xs` contents padding, which uses `--global-scale`).
+        let config = self.config.config();
+        let scale = config.bar.scale.get().value();
+        let styling_scale = config.styling.scale.get().value();
+        let menu = menu::build(&self.item, &root_menu, parent.upcast_ref(), scale, styling_scale);
         let dismiss = menu.dismiss_handle();
         // `registered` = "this menu is the coordinator's open surface, so closing it
         // must notify the coordinator". Set true on each present; flipped false

@@ -307,16 +307,30 @@ impl DropdownInstance {
         wiring.coordinator.open(dismiss, None, anchor);
     }
 
-    /// Toggle this dropdown for `anchor` (a module's canonical opener anchor). The
-    /// coordinator owns the open/close/swap decision (`coordinator.toggle`):
-    /// toggling this same anchor closes it, anything else opens/moves it here.
-    /// Mouse clicks and CLI toggles both route here via one [`DropdownOpener`], so
-    /// the anchor and ceremony are identical.
+    /// Whether THIS dropdown is the coordinator's currently-open surface AND anchored
+    /// at `anchor`. `current_dismiss` is `Some` only while this instance is the open
+    /// surface (its `connect_closed` clears it when swapped out), so combining it with
+    /// the anchor check distinguishes "this dropdown open here" from a *different*
+    /// dropdown open on the same button (a module's left- vs right-click dropdowns
+    /// share an anchor) and from this dropdown open on a *different* button.
+    fn is_open_at(&self, coordinator: &OpenSurfaceCoordinator, anchor: &DropdownAnchor) -> bool {
+        self.current_dismiss.borrow().is_some() && coordinator.on_same_anchor(&anchor.widget)
+    }
+
+    /// Toggle this dropdown for `anchor` (a module's canonical opener anchor). Closes
+    /// it only when THIS dropdown is already open here; otherwise opens it, which
+    /// swaps out whatever else is showing (so clicking a module's other-button
+    /// dropdown switches to it in one click) or re-anchors this one to a new button.
+    /// Mouse clicks and CLI toggles both route here via one [`DropdownOpener`].
     fn toggle_on(&self, anchor: &DropdownAnchor, style: DropdownStyle) {
         let Some(coordinator) = self.coordinator() else {
             return;
         };
-        coordinator.toggle(&anchor.widget, || self.open_on(anchor, style));
+        if self.is_open_at(&coordinator, anchor) {
+            coordinator.dismiss_current();
+        } else {
+            self.open_on(anchor, style);
+        }
     }
 
     /// Open-only variant of [`toggle_on`](Self::toggle_on): opens (or reparents)
@@ -326,7 +340,9 @@ impl DropdownInstance {
         let Some(coordinator) = self.coordinator() else {
             return;
         };
-        coordinator.open_only(&anchor.widget, || self.open_on(anchor, style));
+        if !self.is_open_at(&coordinator, anchor) {
+            self.open_on(anchor, style);
+        }
     }
 
     /// Open (or reparent-and-open) this dropdown anchored to `anchor`, regardless

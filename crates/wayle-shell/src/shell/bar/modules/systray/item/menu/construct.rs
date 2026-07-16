@@ -25,7 +25,7 @@ use super::column::{MenuColumn, MenuRow, RowActivation, RowKind};
 /// Fraction of the monitor height a *submenu* column may occupy before it
 /// scrolls. Submenus open sideways from a row whose on-screen position isn't
 /// knowable across Wayland surfaces, so they fall back to a monitor fraction.
-const MAX_HEIGHT_FRACTION: f64 = 0.85;
+const MAX_HEIGHT_FRACTION: f64 = 0.5;
 /// Used when the monitor geometry can't be read (surface not yet realized).
 const FALLBACK_MONITOR_HEIGHT: i32 = 1080;
 /// Gap kept between a column and the far monitor edge. `set_max_content_height`
@@ -46,6 +46,14 @@ const MIN_MENU_HEIGHT: i32 = 120;
 const ROOT_GAP_REM: f32 = 0.275;
 /// Logical pixels per rem, matching the dropdowns' `REM_PX`.
 const REM_PX: f32 = 16.0;
+/// A submenu is shifted out so its card meets the parent panel's edge rather than
+/// tucking under the parent row button. The shift clears BOTH the parent panel's
+/// right contents padding AND the child submenu's own left contents padding (the
+/// child card extends left of its anchor by that padding), i.e. `2 × space-xs`
+/// (`$base-space-xs`, scaled by `styling.scale` / `--global-scale`). A token, not a
+/// measurement — the panel's min-width leaves centred empty space around the rows,
+/// so every widget's position in the panel is offset by it.
+const SUBMENU_FLUSH_REM: f32 = 0.5;
 
 /// The per-column height caps, computed once from the tray button's geometry and
 /// reused for every (re)build of a column — including submenu columns created
@@ -58,18 +66,23 @@ pub(super) struct BuildCtx {
     root_max_height: i32,
     /// Cap for submenu columns — a monitor fraction (see [`MAX_HEIGHT_FRACTION`]).
     submenu_max_height: i32,
-    /// The configured bar scale, for the root menu's bar-gap offset (see
-    /// [`realign_root`]).
+    /// The configured bar scale (`bar.scale`), for the root menu's bar-gap offset,
+    /// which matches the dropdown panels' `DropdownMargins` (see [`realign_root`]).
     scale: f32,
+    /// The configured styling scale (`styling.scale` / `--global-scale`), for the
+    /// submenu's flush offset, which matches the panel's `space-xs` contents padding
+    /// (see [`realign_submenu`]).
+    styling_scale: f32,
 }
 
-/// Compute the height caps from the tray button's on-screen geometry; `scale` is
-/// the configured bar scale (for the root bar-gap offset).
-pub(super) fn build_ctx(tray_button: &gtk::Widget, scale: f32) -> BuildCtx {
+/// Compute the height caps from the tray button's on-screen geometry; `scale` is the
+/// bar scale (root bar-gap) and `styling_scale` the styling scale (submenu flush).
+pub(super) fn build_ctx(tray_button: &gtk::Widget, scale: f32, styling_scale: f32) -> BuildCtx {
     BuildCtx {
         root_max_height: root_available_height(tray_button),
         submenu_max_height: submenu_max_height(tray_button),
         scale,
+        styling_scale,
     }
 }
 
@@ -383,7 +396,7 @@ pub(super) fn reconcile_column(
         if column.depth == 0 {
             realign_root(&column.popover, ctx.scale);
         } else {
-            realign_submenu(&column.popover);
+            realign_submenu(&column.popover, ctx.styling_scale);
         }
     }
 }
@@ -462,7 +475,7 @@ fn rederive_separators(column: &Rc<MenuColumn>, plan: &[RowPlan]) {
 
 /// Wire a column's popover and all its rows, recursing into submenu columns.
 pub(super) fn wire_columns(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>) {
-    wire_popover(column, inner.ctx.scale);
+    wire_popover(column, inner.ctx.scale, inner.ctx.styling_scale);
 
     let children: Vec<Rc<MenuColumn>> = {
         let rows = column.rows.borrow();
@@ -482,7 +495,7 @@ pub(super) fn wire_columns(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>) {
     }
 }
 
-fn wire_popover(column: &Rc<MenuColumn>, scale: f32) {
+fn wire_popover(column: &Rc<MenuColumn>, scale: f32, styling_scale: f32) {
     // No per-popover key controller: keyboard focus sits on the bar/scrim, not the
     // (non-focusable) menu columns, so nav keys are forwarded from there via the
     // coordinator (see `menu`'s `key_handler`/`handle_key`).
@@ -497,9 +510,11 @@ fn wire_popover(column: &Rc<MenuColumn>, scale: f32) {
         return;
     }
 
-    // Submenus only nudge themselves on map so their first row lines up with the
-    // row that opened them.
-    column.popover.connect_map(realign_submenu);
+    // Submenus nudge themselves on map so their first row lines up with the row that
+    // opened them and their card meets the parent panel edge.
+    column
+        .popover
+        .connect_map(move |popover| realign_submenu(popover, styling_scale));
 
     // When a submenu closes for any reason (Left/Escape, hovering away, or a
     // cascade dismiss), drop the parent's pointer to it so the state stays in
@@ -531,6 +546,12 @@ fn wire_popover(column: &Rc<MenuColumn>, scale: f32) {
 /// transitions need no re-wiring.
 fn wire_row(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>, row: &MenuRow) {
     let motion = gtk::EventControllerMotion::new();
+
+    // Hover-select on the pointer crossing into a row — but NOT when the crossing is
+    // synthetic, from the menu scrolling a new row under a stationary pointer during
+    // keyboard nav (`keyboard_nav`), which would snap the selection off the keyboard
+    // cursor. The first real pointer motion clears the flag and snaps to the row the
+    // cursor is over.
     motion.connect_enter({
         let inner = Rc::downgrade(inner);
         let column = Rc::downgrade(column);
@@ -538,6 +559,39 @@ fn wire_row(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>, row: &MenuRow) {
         move |_, _, _| {
             if let (Some(inner), Some(column), Some(button)) =
                 (inner.upgrade(), column.upgrade(), button.upgrade())
+                && !inner.keyboard_nav.get()
+                && let Some(index) = column.index_of_button(&button)
+            {
+                inner.hover_row(&column, index);
+            }
+        }
+    });
+    motion.connect_motion({
+        let inner = Rc::downgrade(inner);
+        let column = Rc::downgrade(column);
+        let button = row.button.downgrade();
+        move |controller, _, _| {
+            let Some(inner) = inner.upgrade() else {
+                return;
+            };
+            // Ignore SYNTHETIC motion — GTK re-runs pointer targeting (firing a motion)
+            // when a popdown/reconcile/scroll slides content under a stationary pointer,
+            // which must NOT hand control back to the pointer or it would snap the
+            // selection off the keyboard cursor. A real move changes the pointer's
+            // surface position; a synthetic one doesn't. (Use the surface position, not
+            // the row-local x/y the signal passes: the latter shifts when the row itself
+            // scrolls/relayouts under a still pointer.)
+            let Some(pos) = controller.current_event().and_then(|event| event.position()) else {
+                return;
+            };
+            if inner.pointer_pos.replace(Some(pos)) == Some(pos) {
+                return;
+            }
+            // Real move: on the transition out of keyboard nav, snap to the row under
+            // the pointer once; further motion is a cheap no-op (crossings are handled
+            // by `connect_enter`).
+            if inner.keyboard_nav.replace(false)
+                && let (Some(column), Some(button)) = (column.upgrade(), button.upgrade())
                 && let Some(index) = column.index_of_button(&button)
             {
                 inner.hover_row(&column, index);
@@ -590,23 +644,34 @@ pub(super) fn teardown_column(column: &Rc<MenuColumn>) {
     column.popover.unparent();
 }
 
-/// Offset a submenu popover so its top edge lines up with the top of the row it
-/// opened from, instead of GTK's default vertical centring on that row (which
-/// pushes tall submenus off the top of the screen). Wired on `map` and re-run by
-/// reconcile when a visible submenu's height changes.
-fn realign_submenu(popover: &gtk::Popover) {
+/// Offset a submenu popover so (vertically) its top lines up with the row it
+/// opened from — instead of GTK's default vertical centring, which pushes tall
+/// submenus off the top of the screen — and (horizontally) its card is flush with
+/// the parent *panel's* edge rather than the parent *row button's* edge. Wired on
+/// `map` and re-run by reconcile when a visible submenu's height changes.
+fn realign_submenu(popover: &gtk::Popover, styling_scale: f32) {
     let (Some(anchor), Some(content)) = (popover.parent(), popover.child()) else {
         return;
     };
+
+    // Vertical: line the submenu's top up with the row that opened it. Measure
+    // rather than read `height()`: on `map` the content isn't allocated yet, so
+    // `height()` is 0 and the offset would never apply.
     let anchor_height = anchor.height();
-    // Measure rather than read `height()`: on `map` the content isn't allocated
-    // yet, so `height()` is 0 and the offset would never apply.
     let (_, content_height, _, _) = content.measure(gtk::Orientation::Vertical, -1);
-    if anchor_height > 0 && content_height > 0 {
+    let offset_y = if anchor_height > 0 && content_height > 0 {
         // GTK centres the popover on the anchor row; shift it down by half the
         // height difference so the popover's top sits at the row's top.
-        popover.set_offset(0, (content_height - anchor_height) / 2);
-    }
+        (content_height - anchor_height) / 2
+    } else {
+        0
+    };
+
+    // Horizontal: shift the submenu out so its card meets the parent panel's edge
+    // instead of tucking under the parent row button. See `SUBMENU_FLUSH_REM`.
+    let offset_x = (SUBMENU_FLUSH_REM * REM_PX * styling_scale).round() as i32;
+
+    popover.set_offset(offset_x, offset_y);
 }
 
 /// Offset the root popover so its bar-facing edge sits at the bar's OUTER edge

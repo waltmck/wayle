@@ -19,8 +19,8 @@
 //! pointer or keyboard (see [`MenuInner::select`]): the mouse selects whatever entry
 //! it moves over, and otherwise the keyboard has priority (Up/Down move within the
 //! entry's column, Right descends into its submenu, Left ascends to the entry that
-//! owns the column). The selected entry is shown with its submenu; the selection is
-//! a `.selected` CSS class.
+//! owns the column; vim `h`/`j`/`k`/`l` are accepted as aliases for the arrows). The
+//! selected entry is shown with its submenu; the selection is a `.selected` CSS class.
 //!
 //! Submodules: [`column`] (one column: popover + rows + cursor + open child) and
 //! [`construct`] (build + wire).
@@ -244,11 +244,11 @@ impl MenuInner {
     }
 
     /// Dispatch a forwarded nav key against the selected entry (or the root when
-    /// nothing is selected yet). Up/Down move the selection within its column, Right
-    /// descends into its submenu, Left ascends to the entry that owns its column,
-    /// Enter/Space activate, Escape dismisses. Escape is normally intercepted by the
-    /// bar/scrim (`dismiss_current`) before it reaches here, but handling it too is
-    /// harmless.
+    /// nothing is selected yet). Up/Down (or vim `k`/`j`) move the selection within its
+    /// column, Right (`l`) descends into its submenu, Left (`h`) ascends to the entry
+    /// that owns its column, Enter/Space activate, Escape dismisses. Escape is normally
+    /// intercepted by the bar/scrim (`dismiss_current`) before it reaches here, but
+    /// handling it too is harmless.
     fn handle_key(&self, root: &Rc<MenuColumn>, key: gtk::gdk::Key) -> bool {
         use gtk::gdk::Key;
 
@@ -257,20 +257,22 @@ impl MenuInner {
             // Keyboard is driving: `keyboard_nav` stops a synthetic hover-enter (from
             // scroll_into_view sliding a row under a stationary pointer) snapping the
             // selection off the keyboard cursor, until the next real pointer move.
-            Key::Down => {
+            // Vim keys (h/j/k/l) are accepted as aliases for the arrows and behave
+            // identically.
+            Key::Down | Key::j => {
                 self.keyboard_nav.set(true);
                 if let Some(next) = column.next_from(index) {
                     self.select(&column, next, true);
                 }
             }
-            Key::Up => {
+            Key::Up | Key::k => {
                 self.keyboard_nav.set(true);
                 if let Some(prev) = column.prev_from(index) {
                     self.select(&column, prev, true);
                 }
             }
-            Key::Right => self.enter(&column, index),
-            Key::Left => self.leave(&column),
+            Key::Right | Key::l => self.enter(&column, index),
+            Key::Left | Key::h => self.leave(&column),
             Key::Return | Key::KP_Enter | Key::space => self.activate(&column, index),
             Key::Escape => self.root_popover.popdown(),
             _ => return false,

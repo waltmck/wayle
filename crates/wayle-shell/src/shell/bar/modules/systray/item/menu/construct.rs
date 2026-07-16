@@ -511,10 +511,27 @@ fn wire_popover(column: &Rc<MenuColumn>, scale: f32, styling_scale: f32) {
     }
 
     // Submenus nudge themselves on map so their first row lines up with the row that
-    // opened them and their card meets the parent panel edge.
-    column
-        .popover
-        .connect_map(move |popover| realign_submenu(popover, styling_scale));
+    // opened them and their card meets the parent panel edge. They also RE-align on
+    // every surface layout: the compositor can FLIP a submenu to the LEFT of its row
+    // near the screen's right edge, and the flush nudge's direction depends on that
+    // resolved side (see `realign_submenu`), which isn't known until after placement.
+    // The popup surface persists across open/close, so the layout handler is wired once.
+    column.popover.connect_map({
+        let wired = Rc::new(Cell::new(false));
+        move |popover| {
+            realign_submenu(popover, styling_scale);
+            if !wired.replace(true)
+                && let Some(surface) = popover.surface()
+            {
+                let popover = popover.downgrade();
+                surface.connect_layout(move |_, _, _| {
+                    if let Some(popover) = popover.upgrade() {
+                        realign_submenu(&popover, styling_scale);
+                    }
+                });
+            }
+        }
+    });
 
     // When a submenu closes for any reason (Left/Escape, hovering away, or a
     // cascade dismiss), drop the parent's pointer to it so the state stays in
@@ -667,11 +684,34 @@ fn realign_submenu(popover: &gtk::Popover, styling_scale: f32) {
         0
     };
 
-    // Horizontal: shift the submenu out so its card meets the parent panel's edge
-    // instead of tucking under the parent row button. See `SUBMENU_FLUSH_REM`.
-    let offset_x = (SUBMENU_FLUSH_REM * REM_PX * styling_scale).round() as i32;
+    // Horizontal: shift the submenu out so its card is flush with the parent panel's
+    // edge instead of tucking under the parent row button (see `SUBMENU_FLUSH_REM`).
+    // The nudge follows the side the submenu ACTUALLY opened on: GTK opens it to the
+    // right of the row, but the compositor FLIPS it to the left when the screen's right
+    // edge is too close. A right-opening submenu is nudged right (+); a flipped
+    // left-opening one must be nudged left (−), or the same outward nudge would push it
+    // INTO the parent (overlap). The resolved side is read from the popup's surface
+    // anchor once positioned — `West` for a right-opening submenu, `East` once flipped
+    // to the left. Before placement it reads the default (right); the surface-layout
+    // re-run wired in `wire_popover` corrects it after the compositor has flipped it.
+    let magnitude = (SUBMENU_FLUSH_REM * REM_PX * styling_scale).round() as i32;
+    let opened_left = popover
+        .surface()
+        .and_downcast::<gdk::Popup>()
+        .is_some_and(|popup| {
+            matches!(
+                popup.surface_anchor(),
+                gdk::Gravity::East | gdk::Gravity::NorthEast | gdk::Gravity::SouthEast
+            )
+        });
+    let offset_x = if opened_left { -magnitude } else { magnitude };
 
-    popover.set_offset(offset_x, offset_y);
+    // Idempotent: only re-position when the offset actually changes, so the
+    // surface-layout re-run (which fires on every layout) converges instead of looping
+    // set_offset -> relayout -> set_offset.
+    if popover.offset() != (offset_x, offset_y) {
+        popover.set_offset(offset_x, offset_y);
+    }
 }
 
 /// Offset the root popover so its bar-facing edge sits at the bar's OUTER edge

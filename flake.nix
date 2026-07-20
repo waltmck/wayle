@@ -24,7 +24,7 @@
     # lockfile references Git sources and the vendor set differs from the tagged
     # release nixpkgs builds. It MUST be refreshed whenever Cargo.lock changes:
     # set it to lib.fakeHash, build, and paste the value Nix reports.
-    cargoHash = "sha256-Kxp5RDYhe6yzxCTFL60cDg+PykAJDWB+fpLELovh++E=";
+    cargoHash = "sha256-CMjoqXC2O69G4AhKIYZcR4XzPm5jr8ceHfSUTyLnfgU=";
 
     # Reuse the nixpkgs `wayle` derivation wholesale — build inputs, the
     # GApps/bindgen hooks, desktop item, shell completions, icon install and

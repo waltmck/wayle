@@ -7,7 +7,7 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
 - A fix that makes the `netstat` module work correctly without NetworkManager. [#316](https://github.com/wayle-rs/wayle/pull/316)
 - Use absolute paths for `/bin/sh` to fix certain functionality when run from a systemd service. [#316](https://github.com/wayle-rs/wayle/pull/317)
 - [WIP] Allow passing a config file location with `-c` or `--config`, enabling a declarative Nix-based module without home-manager. [#318](https://github.com/wayle-rs/wayle/pull/318)
-- Generally much more robust notification service, that works more efficiently with a large number of notifications [#321](https://github.com/wayle-rs/wayle/pull/321) [#38](https://github.com/wayle-rs/wayle-services/pull/36):
+- Rewritten notification service, that is much more efficient with large numbers of notifications and supports multiple backends [#321](https://github.com/wayle-rs/wayle/pull/321) [#38](https://github.com/wayle-rs/wayle-services/pull/36):
   - Direct dbus actions to the notification owner's bus name to work around broken apps (matching GNOME and dunst)
   - Remove non-functional action buttons from orphaned FDO notifications
   - Add support for the `org.gtk.Notifications` backend, which allows notification actions to persist app restarts (only for apps that support `org.gtk.Notifications`, in practice GTK/GApplications).
@@ -15,6 +15,7 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
   - Minimize widget churn on adding/removing notifications
   - Deduplicate icon images in memory
   - Fix bug that made notification hints silently fail to load from the database on startup.
+  - Support for `org.freedesktop.portal.Notification` backend, allowing notifications to work correctly from Flatpaks. Supersedes [#333](https://github.com/wayle-rs/wayle/pull/333)
 - Implement systemd `Type=notify` support to avoid use-before-setup race conditions on startup. [#323](https://github.com/wayle-rs/wayle/pull/323)
 - Add `general.symbolic-icon-fallback` option to fall back to a symbolic desktop icon if there is no hardcoded symbolic icon (applies to notification and workspace modules). [#325](https://github.com/wayle-rs/wayle/pull/325)
 - Pointer cursor on hover over workspace buttons, matching other clickable elements in the shell. [#326](https://github.com/wayle-rs/wayle/pull/326)
@@ -51,9 +52,10 @@ This package can be built normally with `cargo build`. It is also packaged as fl
 
 | Output | Description |
 |--------|-------------|
-| `packages.<system>.wayle` / `.default` | The `wayle` package (stolen from `nixpkgs`) |
+| `packages.<system>.wayle` / `.default` | The `wayle` package (stolen from `nixpkgs`, plus this fork's source and the `wayle.portal` install) |
 | `devShells.<system>.default` | A dev shell (alternatively use `devenv`) |
 | `overlays.default` | Overlay that overrides `pkgs.wayle` |
+| `nixosModules.default` | The `services.wayle` NixOS module (declarative config + `Type=notify` user service + notification portal) |
 | `formatter.<system>` | `nixfmt-rfc-style`, for `nix fmt` |
 
 Supported systems: `x86_64-linux`, `aarch64-linux`.
@@ -82,17 +84,72 @@ libraries, `cmake`, the bindgen/clang setup for libcava) and adds `cargo`, `rust
 
 ## Installation with NixOS
 
-### NixOS (flake)
+### NixOS module (`services.wayle`, recommended)
+
+The flake exports a NixOS module (`nixosModules.default`) that installs Wayle, generates
+its config declaratively, runs it as a `Type=notify` user service, and registers its
+notification portal so notifications work from Flatpaks — no home-manager required.
+
+```nix
+{
+  inputs.waltmck-wayle.url = "github:waltmck/wayle";   # or "git+file:///path/to/wayle"
+
+  outputs = { nixpkgs, waltmck-wayle, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        waltmck-wayle.nixosModules.default
+        ({ pkgs, ... }: {
+          services.wayle = {
+            enable = true;
+
+            # Your config.toml as Nix; generated to /etc/wayle/config.toml and passed via --config.
+            settings = {
+              # general.symbolic-icon-fallback = true;
+              # bar.modules.left = [ ... ];
+            };
+
+            # Tools Wayle shells out to at runtime (placed on the service's PATH).
+            deps = with pkgs; [ bash coreutils ];
+
+            # Icon themes exposed to the shell via XDG_DATA_DIRS.
+            iconThemes = with pkgs; [ adwaita-icon-theme papirus-icon-theme ];
+          };
+
+          # Required for the notification portal (and portals in general) to run.
+          xdg.portal.enable = true;
+        })
+      ];
+    };
+  };
+}
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enable` | bool | `false` | Install Wayle and run it as a user service. |
+| `settings` | TOML (attrset) | `{}` | Written to `/etc/wayle/config.toml`; the shell starts with `--config`. |
+| `package` | package | this flake's `wayle` | Read-only; the fork build (bundles `wayle.portal`). |
+| `deps` | list of package | `[]` | Added to the service's `PATH`. |
+| `iconThemes` | list of package | `[]` | Their `share/` directories are appended to `XDG_DATA_DIRS`. |
+
+When enabled the module also sets `xdg.portal.extraPortals` and selects Wayle as the
+`org.freedesktop.impl.portal.Notification` backend. That only takes effect with
+`xdg.portal.enable = true`, which you must set yourself (shown above).
+
+### NixOS (package only)
+
+To install just the binary — bringing your own config and service — use the overlay or the
+package directly:
 
 ```nix
 {
   inputs.waltmck-wayle.url = "github:waltmck/wayle";   # or a fork / "git+file:///path/to/wayle"
 
-  outputs = { nixpkgs, wayle, ... }: {
+  outputs = { nixpkgs, waltmck-wayle, ... }: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       modules = [
         {
-          nixpkgs.overlays = [ wayle.overlays.default ];
+          nixpkgs.overlays = [ waltmck-wayle.overlays.default ];
           environment.systemPackages = [ pkgs.wayle ];
         }
         # ... OR ...

@@ -510,27 +510,32 @@ fn wire_popover(column: &Rc<MenuColumn>, scale: f32, styling_scale: f32) {
         return;
     }
 
-    // Submenus nudge themselves on map so their first row lines up with the row that
-    // opened them and their card meets the parent panel edge. They also RE-align on
-    // every surface layout: the compositor can FLIP a submenu to the LEFT of its row
-    // near the screen's right edge, and the flush nudge's direction depends on that
-    // resolved side (see `realign_submenu`), which isn't known until after placement.
-    // The popup surface persists across open/close, so the layout handler is wired once.
-    column.popover.connect_map({
-        let wired = Rc::new(Cell::new(false));
-        move |popover| {
+    // Submenus nudge themselves so their first row lines up with the row that opened
+    // them and their card is flush with the parent panel edge. The compositor may FLIP
+    // a submenu to the LEFT of its row near the screen's right edge, and the flush
+    // nudge's direction depends on that resolved side (see `realign_submenu`), which
+    // isn't known until a frame or two after the popup is presented. So re-run the
+    // alignment for a few frames on the frame clock (a tick callback).
+    //
+    // It must NOT re-run from the surface `layout` signal: re-positioning (`set_offset`)
+    // from within layout re-enters layout and spins the frame clock ("layout
+    // continuously requested, giving up after 4 tries"), which leaves the popover
+    // without an allocation and blanks its contents. A tick runs BEFORE layout, so its
+    // `set_offset` just schedules the next frame's layout; `realign_submenu` is
+    // idempotent, and the tick self-terminates after a few frames, so this neither
+    // loops nor accumulates across repeated opens.
+    column.popover.connect_map(move |popover| {
+        realign_submenu(popover, styling_scale);
+        let frames = Cell::new(0u8);
+        popover.add_tick_callback(move |popover, _| {
             realign_submenu(popover, styling_scale);
-            if !wired.replace(true)
-                && let Some(surface) = popover.surface()
-            {
-                let popover = popover.downgrade();
-                surface.connect_layout(move |_, _, _| {
-                    if let Some(popover) = popover.upgrade() {
-                        realign_submenu(&popover, styling_scale);
-                    }
-                });
+            frames.set(frames.get() + 1);
+            if frames.get() < 4 {
+                glib::ControlFlow::Continue
+            } else {
+                glib::ControlFlow::Break
             }
-        }
+        });
     });
 
     // When a submenu closes for any reason (Left/Escape, hovering away, or a

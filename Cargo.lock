@@ -4908,6 +4908,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayle-portal"
+version = "0.1.0"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#dc185bfe03ad00dcfbf2d8e041b659f523208c20"
+dependencies = [
+ "thiserror 2.0.18",
+ "tracing",
+ "zbus",
+]
+
+[[package]]
 name = "wayle-power-profiles"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4999,6 +5009,7 @@ dependencies = [
  "wayle-network",
  "wayle-niri",
  "wayle-notification",
+ "wayle-portal",
  "wayle-power-profiles",
  "wayle-styling",
  "wayle-sysinfo",
@@ -5069,7 +5080,7 @@ dependencies = [
 [[package]]
 name = "wayle-traits"
 version = "0.1.2"
-source = "git+https://github.com/waltmck/wayle-services?branch=master#d03af409d53ad8f608946e9adf10cadba228a7e9"
+source = "git+https://github.com/waltmck/wayle-services?branch=master#dc185bfe03ad00dcfbf2d8e041b659f523208c20"
 
 [[package]]
 name = "wayle-wallpaper"
@@ -5190,7 +5201,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

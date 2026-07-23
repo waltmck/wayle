@@ -28,22 +28,9 @@ pub(super) fn spawn_notification(
     sender: &ComponentSender<NotificationPopupCard>,
     notification: &Arc<Notification>,
 ) {
-    watch!(
-        sender,
-        [
-            notification.summary.watch().skip(1),
-            notification.body.watch().skip(1),
-            notification.actions.watch().skip(1),
-            notification.default_action.watch().skip(1),
-            notification.urgency.watch().skip(1),
-            notification.app_name.watch().skip(1),
-            notification.app_icon.watch().skip(1),
-            notification.image_path.watch().skip(1),
-            notification.hints.watch().skip(1),
-            notification.desktop_entry.watch().skip(1),
-        ],
-        |out| {
-            let _ = out.send(CardCmd::NotificationChanged);
-        }
-    );
+    // All display facets are one atomic `view` snapshot now, so a single subscription covers
+    // every displayed field (content updated via replaces_id, actions stripped on disconnect, …).
+    watch!(sender, [notification.view.watch().skip(1)], |out| {
+        let _ = out.send(CardCmd::NotificationChanged);
+    });
 }

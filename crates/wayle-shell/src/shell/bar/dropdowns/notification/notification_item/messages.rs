@@ -18,8 +18,3 @@ pub(crate) enum NotificationItemInput {
     /// The underlying notification's content/actions changed; re-render in place.
     Refresh,
 }
-
-#[derive(Debug)]
-pub(crate) enum NotificationItemOutput {
-    Dismissed(u32),
-}

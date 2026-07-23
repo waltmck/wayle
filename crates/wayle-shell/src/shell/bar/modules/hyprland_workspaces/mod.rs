@@ -92,7 +92,7 @@ impl Component for HyprlandWorkspaces {
             Self::initial_active_workspace(&init.hyprland, &init.settings, monitor_specific);
         let focused_monitor = Self::initial_focused_monitor(&init.hyprland);
         let bar_scale = config.bar.scale.clone();
-        let symbolic_icon_fallback = config.general.symbolic_icon_fallback.clone();
+        let prefer_color = config.general.prefer_color_icons.clone();
 
         Self::spawn_load_workspace_rules(&sender, &init.hyprland);
 
@@ -102,7 +102,7 @@ impl Component for HyprlandWorkspaces {
             &init.hyprland,
             theme_provider,
             bar_scale,
-            symbolic_icon_fallback,
+            prefer_color,
             &init.settings,
         );
 

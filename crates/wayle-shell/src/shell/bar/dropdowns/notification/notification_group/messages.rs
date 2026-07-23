@@ -7,7 +7,7 @@ pub(crate) struct NotificationGroupInit {
     pub app_name: Option<String>,
     pub notifications: Vec<Arc<Notification>>,
     pub icon_source: IconSource,
-    pub symbolic_fallback: bool,
+    pub prefer_color: bool,
 }
 
 #[derive(Debug)]

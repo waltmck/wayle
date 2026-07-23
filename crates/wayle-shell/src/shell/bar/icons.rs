@@ -326,6 +326,43 @@ fn resolve_symbolic_desktop_icon(identifier: &str) -> Option<String> {
     icon_exists(&symbolic).then_some(symbolic)
 }
 
+thread_local! {
+    /// Caches `identifier -> colour icon name` resolutions, mirroring
+    /// [`SYMBOLIC_DESKTOP_CACHE`]. `None` (no colour variant) is cached too.
+    static COLOR_DESKTOP_CACHE: RefCell<HashMap<String, Option<String>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Resolves the full-colour variant of an app's desktop-entry icon.
+///
+/// The counterpart to [`symbolic_desktop_icon`]: returns the desktop entry's `Icon=`
+/// name only when it is non-symbolic and exists in the current icon theme (never a
+/// `-symbolic` name and never a bare filesystem path), so callers fall through to a
+/// symbolic icon otherwise. No-op (returns `None`) when there is no GDK display.
+pub(crate) fn color_desktop_icon(identifier: &str) -> Option<String> {
+    if identifier.is_empty() {
+        return None;
+    }
+
+    COLOR_DESKTOP_CACHE.with(|cache| {
+        if let Some(cached) = cache.borrow().get(identifier) {
+            return cached.clone();
+        }
+        let resolved = resolve_color_desktop_icon(identifier);
+        cache
+            .borrow_mut()
+            .insert(identifier.to_owned(), resolved.clone());
+        resolved
+    })
+}
+
+fn resolve_color_desktop_icon(identifier: &str) -> Option<String> {
+    gdk::Display::default()?;
+
+    let icon = desktop_entry_icon(identifier)?;
+    (!icon.ends_with("-symbolic") && icon_exists(&icon)).then_some(icon)
+}
+
 /// Reads the `Icon=` value from an app's desktop entry — by desktop id first,
 /// then by matching `StartupWMClass`.
 ///

@@ -6,7 +6,7 @@ use wayle_config::schemas::modules::WorkspaceStyle;
 
 use crate::{
     glob,
-    shell::bar::icons::{DEFAULT_APP_ICON_MAP, symbolic_desktop_icon},
+    shell::bar::icons::{DEFAULT_APP_ICON_MAP, color_desktop_icon, symbolic_desktop_icon},
 };
 
 const TITLE_PREFIX: &str = "title:";
@@ -35,7 +35,7 @@ pub(super) fn resolve_app_icon(
     title: Option<&str>,
     user_map: &HashMap<String, String>,
     fallback: &str,
-    symbolic_fallback: bool,
+    prefer_color: bool,
 ) -> String {
     let (title_entries, app_entries): (Vec<_>, Vec<_>) = user_map
         .iter()
@@ -55,13 +55,19 @@ pub(super) fn resolve_app_icon(
         return icon.to_string();
     }
 
+    // Prefer the app's full-colour desktop icon over the built-in symbolic mapping when asked.
+    if prefer_color
+        && let Some(color) = color_desktop_icon(app_id)
+    {
+        return color;
+    }
+
     if let Some(icon) = glob::find_match(DEFAULT_APP_ICON_MAP.iter().copied(), app_id) {
         return icon.to_string();
     }
 
-    if symbolic_fallback
-        && let Some(symbolic) = symbolic_desktop_icon(app_id)
-    {
+    // Fall back to the app's symbolic desktop icon if one exists (always attempted).
+    if let Some(symbolic) = symbolic_desktop_icon(app_id) {
         return symbolic;
     }
 

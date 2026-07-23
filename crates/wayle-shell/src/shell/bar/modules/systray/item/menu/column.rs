@@ -104,20 +104,24 @@ impl MenuColumn {
     }
 
     /// Show `child`'s popover beneath one of this column's rows, closing any
-    /// other child first. No-op if `child` is already the open one.
-    pub(super) fn open_child(&self, child: &Rc<MenuColumn>) {
+    /// other child first. No-op if `child` is already the open one. Returns `true`
+    /// when it actually popped `child` up (i.e. it was not already open), so the
+    /// caller can fire a one-shot side effect — a DBusMenu `AboutToShow` — exactly
+    /// once per open rather than on every hover tick.
+    pub(super) fn open_child(&self, child: &Rc<MenuColumn>) -> bool {
         let already_open = self
             .open_child
             .borrow()
             .as_ref()
             .is_some_and(|open| Rc::ptr_eq(open, child));
         if already_open {
-            return;
+            return false;
         }
         self.close_open_child();
         child.set_selected(None);
         child.popover.popup();
         *self.open_child.borrow_mut() = Some(child.clone());
+        true
     }
 
     /// Close the open submenu (and, via `cascade_popdown`, its descendants).
@@ -150,6 +154,12 @@ impl MenuColumn {
             RowKind::Leaf => RowActivation::Leaf(row.id),
             RowKind::Submenu { .. } => RowActivation::Submenu,
         })
+    }
+
+    /// The DBusMenu item id of row `index` (the id whose submenu is being shown, for
+    /// an `AboutToShow` notification).
+    pub(super) fn row_id(&self, index: usize) -> Option<i32> {
+        self.rows.borrow().get(index).map(|row| row.id)
     }
 
     /// The submenu column owned by row `index`, if that row is a submenu.

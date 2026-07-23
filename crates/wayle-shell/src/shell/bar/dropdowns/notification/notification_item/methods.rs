@@ -1,12 +1,13 @@
 use gtk::prelude::*;
 use relm4::{gtk, spawn_local};
-use wayle_notification::core::types::Action;
+use wayle_notification::core::types::{Action, InvokeSource};
 
 use super::NotificationItem;
 use crate::{
     i18n::t,
     shell::notification_popup::helpers::{
-        RelativeTime, ResolvedIcon, cached_texture, resolve_icon, urgency_css_class,
+        RelativeTime, ResolvedIcon, cached_texture, mint_activation_token, priority_css_class,
+        resolve_notification_icon,
     },
 };
 
@@ -46,11 +47,9 @@ impl NotificationItem {
             actions_box.remove(&child);
         }
 
-        let actions = self.notification.actions.get();
-        let visible_actions: Vec<_> = actions
-            .iter()
-            .filter(|action| action.id != Action::DEFAULT_ID)
-            .collect();
+        // The `buttons` facet already excludes the body/default action.
+        let actions = self.notification.view.get().actions;
+        let visible_actions: Vec<_> = actions.buttons.iter().collect();
 
         if visible_actions.is_empty() {
             actions_box.set_visible(false);
@@ -83,17 +82,19 @@ impl NotificationItem {
         button.set_cursor_from_name(Some("pointer"));
 
         let notification = self.notification.clone();
-        let action_id = action.id.clone();
+        let action = action.clone();
 
         button.connect_clicked(move |_| {
             let notif = notification.clone();
-            let aid = action_id.clone();
+            let action = action.clone();
+            let token = mint_activation_token();
 
             spawn_local(async move {
-                if let Err(err) = notif.invoke(&aid).await {
-                    tracing::warn!(action = %aid, error = %err, "action invocation failed");
+                // `invoke` removes it from history itself (unless resident), so no explicit
+                // dismiss — and a failed action no longer force-removes the notification.
+                if let Err(err) = notif.invoke(&action, InvokeSource::History, token.as_deref()).await {
+                    tracing::warn!(action = %action.label, error = %err, "action invocation failed");
                 }
-                notif.dismiss();
             });
         });
 
@@ -101,7 +102,7 @@ impl NotificationItem {
     }
 
     pub(super) fn setup_default_action(&self, main_row: &gtk::Box) -> Option<gtk::GestureClick> {
-        if self.notification.default_action.get().is_none() {
+        if self.notification.view.get().actions.default.is_none() {
             main_row.set_cursor_from_name(None);
             return None;
         }
@@ -115,11 +116,13 @@ impl NotificationItem {
             gesture.set_state(gtk::EventSequenceState::Claimed);
 
             let notif = notification.clone();
+            let token = mint_activation_token();
             spawn_local(async move {
-                if let Err(err) = notif.invoke(Action::DEFAULT_ID).await {
+                // `activate_default` owns removal from history (unless resident); no explicit
+                // dismiss.
+                if let Err(err) = notif.activate_default(InvokeSource::History, token.as_deref()).await {
                     tracing::warn!(error = %err, "default action invocation failed");
                 }
-                notif.dismiss();
             });
         });
 
@@ -127,25 +130,21 @@ impl NotificationItem {
         Some(click)
     }
 
-    pub(super) fn apply_urgency(&self, root: &gtk::Box) {
-        // Idempotent: drop any previously-applied urgency class before adding current.
-        for class in ["low", "normal", "critical"] {
+    pub(super) fn apply_priority(&self, root: &gtk::Box) {
+        // Idempotent: drop any previously-applied priority class before adding current.
+        for class in ["low", "normal", "high", "urgent"] {
             root.remove_css_class(class);
         }
-        root.add_css_class(urgency_css_class(self.notification.urgency.get()));
+        root.add_css_class(priority_css_class(
+            self.notification.view.get().classification.priority,
+        ));
     }
 
     /// Re-renders the imperative parts of the item in place from the current
     /// notification state (icon, action buttons, urgency, default-click gesture).
     /// Declarative fields (summary/body/time) refresh via `#[watch]`.
     pub(super) fn refresh_widgets(&mut self) {
-        self.resolved_icon = resolve_icon(
-            self.icon_source,
-            &self.notification.app_name.get(),
-            &self.notification.app_icon.get(),
-            &self.notification.image_path.get(),
-            &self.notification.desktop_entry.get(),
-        );
+        self.resolved_icon = resolve_notification_icon(self.icon_source, &self.notification);
 
         if let (Some(icon), Some(container)) = (self.icon.clone(), self.icon_container.clone()) {
             self.apply_icon(&icon, &container);
@@ -156,7 +155,7 @@ impl NotificationItem {
         }
 
         if let Some(root) = self.root.clone() {
-            self.apply_urgency(&root);
+            self.apply_priority(&root);
         }
 
         if let Some(main_row) = self.main_row.clone() {

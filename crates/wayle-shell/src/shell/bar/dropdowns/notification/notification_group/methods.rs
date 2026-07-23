@@ -1,10 +1,10 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use wayle_config::schemas::modules::notification::IconSource;
 use wayle_notification::core::notification::Notification;
 
 use super::{super::notification_item::messages::NotificationItemInit, NotificationGroup};
-use crate::shell::notification_popup::helpers::{ResolvedIcon, resolve_icon};
+use crate::shell::notification_popup::helpers::{ResolvedIcon, resolve_notification_icon};
 
 const MAX_VISIBLE_ITEMS: usize = 3;
 
@@ -62,13 +62,7 @@ impl NotificationGroup {
         notifications: &[Arc<Notification>],
     ) -> Option<String> {
         let first = notifications.first()?;
-        let resolved = resolve_icon(
-            IconSource::Mapped,
-            &first.app_name.get(),
-            &first.app_icon.get(),
-            &first.image_path.get(),
-            &first.desktop_entry.get(),
-        );
+        let resolved = resolve_notification_icon(IconSource::Mapped, first);
 
         match resolved {
             ResolvedIcon::Named(name) => Some(name),
@@ -82,7 +76,7 @@ impl NotificationGroup {
 
         self.preview = notifications
             .first()
-            .map(|notification| notification.summary.get())
+            .map(|notification| notification.view.get().content.summary)
             .unwrap_or_default();
     }
 
@@ -96,28 +90,32 @@ impl NotificationGroup {
     }
 
     fn rebuild_items_if_changed(&mut self, visible: &[Arc<Notification>]) {
-        let old_ids: Vec<u32> = (0..self.items.len())
-            .filter_map(|idx| self.items.get(idx).map(|item| item.notification.id))
-            .collect();
-
-        let new_ids: Vec<u32> = visible.iter().map(|notification| notification.id).collect();
-
-        if old_ids == new_ids {
+        // Unchanged if the item list already matches `visible` by identity (`PartialEq` =
+        // same notification id) in the same order.
+        let unchanged = self.items.len() == visible.len()
+            && (0..self.items.len()).all(|idx| {
+                self.items
+                    .get(idx)
+                    .zip(visible.get(idx))
+                    .is_some_and(|(item, notification)| &item.notification == notification)
+            });
+        if unchanged {
             return;
         }
 
         // Reconcile the factory in place within a single guard scope (one render): drop
         // items that are no longer visible, then move/insert so each slot matches
-        // `visible`. Items whose id persists keep their existing widget and reactive
-        // watchers rather than being destroyed and rebuilt.
-        let new_id_set: HashSet<u32> = new_ids.iter().copied().collect();
+        // `visible`. Items whose notification persists keep their existing widget and
+        // reactive watchers rather than being destroyed and rebuilt.
         let icon_source = self.icon_source;
         let mut guard = self.items.guard();
 
         for idx in (0..guard.len()).rev() {
-            let still_visible = guard
-                .get(idx)
-                .is_some_and(|item| new_id_set.contains(&item.notification.id));
+            let still_visible = guard.get(idx).is_some_and(|item| {
+                visible
+                    .iter()
+                    .any(|notification| &item.notification == notification)
+            });
             if !still_visible {
                 guard.remove(idx);
             }
@@ -127,7 +125,7 @@ impl NotificationGroup {
             let existing = (target_idx..guard.len()).find(|&idx| {
                 guard
                     .get(idx)
-                    .is_some_and(|item| item.notification.id == notification.id)
+                    .is_some_and(|item| &item.notification == notification)
             });
 
             match existing {
@@ -147,13 +145,7 @@ fn build_item_init(
     icon_source: IconSource,
     notification: &Arc<Notification>,
 ) -> NotificationItemInit {
-    let resolved_icon = resolve_icon(
-        icon_source,
-        &notification.app_name.get(),
-        &notification.app_icon.get(),
-        &notification.image_path.get(),
-        &notification.desktop_entry.get(),
-    );
+    let resolved_icon = resolve_notification_icon(icon_source, notification);
 
     NotificationItemInit {
         notification: notification.clone(),

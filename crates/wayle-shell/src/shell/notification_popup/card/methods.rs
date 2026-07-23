@@ -1,14 +1,14 @@
 use gtk::prelude::*;
 use relm4::{gtk, spawn_local};
 use wayle_config::schemas::modules::notification::{PopupCloseBehavior, UrgencyBarThreshold};
-use wayle_notification::core::types::Action;
+use wayle_notification::core::types::{Action, InvokeSource};
 
 use super::NotificationPopupCard;
 use crate::{
     i18n::t,
     shell::notification_popup::helpers::{
-        RelativeTime, ResolvedIcon, cached_texture, resolve_icon, urgency_bar_visible,
-        urgency_css_class,
+        RelativeTime, ResolvedIcon, cached_texture, mint_activation_token, priority_bar_visible,
+        priority_css_class, resolve_notification_icon,
     },
 };
 
@@ -23,7 +23,7 @@ impl NotificationPopupCard {
             root.add_css_class("shadow");
         }
 
-        if urgency_bar_visible(self.notification.urgency.get(), urgency_bar) {
+        if priority_bar_visible(self.notification.view.get().classification.priority, urgency_bar) {
             root.add_css_class("urgency-bar");
         }
     }
@@ -79,11 +79,9 @@ impl NotificationPopupCard {
             actions_box.remove(&child);
         }
 
-        let actions = self.notification.actions.get();
-        let visible_actions: Vec<_> = actions
-            .iter()
-            .filter(|action| action.id != Action::DEFAULT_ID)
-            .collect();
+        // The `buttons` facet already excludes the body/default action.
+        let actions = self.notification.view.get().actions;
+        let visible_actions: Vec<_> = actions.buttons.iter().collect();
 
         if visible_actions.is_empty() {
             actions_box.set_visible(false);
@@ -112,26 +110,35 @@ impl NotificationPopupCard {
         row
     }
 
+    /// The activation context for interactions on this popup card: the banner is always
+    /// dismissed on activation, and the configured [`PopupCloseBehavior`] decides whether it is
+    /// also removed from history. `invoke`/`activate_default` honor `resident` on top of this.
+    fn invoke_source(&self) -> InvokeSource {
+        InvokeSource::Popup {
+            remove_from_history: matches!(self.close_behavior, PopupCloseBehavior::Remove),
+        }
+    }
+
     fn build_action_button(&self, action: &Action) -> gtk::Button {
         let button = gtk::Button::with_label(&action.label);
         button.add_css_class("notification-popup-action-btn");
         button.set_cursor_from_name(Some("pointer"));
 
         let notification = self.notification.clone();
-        let action_id = action.id.clone();
-        let service = self.service.clone();
-        let notif_id = self.notification.id;
+        let action = action.clone();
+        let source = self.invoke_source();
 
         button.connect_clicked(move |_| {
+            let action = action.clone();
+            tracing::debug!(action = %action.label, "action button clicked");
             let notif = notification.clone();
-            let aid = action_id.clone();
-            tracing::debug!(id = notif_id, action = %aid, "action button clicked");
-            service.dismiss_popup(notif_id);
+            let token = mint_activation_token();
             spawn_local(async move {
-                if let Err(err) = notif.invoke(&aid).await {
-                    tracing::warn!(action = %aid, error = %err, "action invocation failed");
+                // `invoke` dismisses per the popup's close policy (and honors `resident`, so a
+                // media-control card survives its own action).
+                if let Err(err) = notif.invoke(&action, source, token.as_deref()).await {
+                    tracing::warn!(action = %action.label, error = %err, "action invocation failed");
                 }
-                notif.dismiss();
             });
         });
 
@@ -139,7 +146,7 @@ impl NotificationPopupCard {
     }
 
     pub(super) fn setup_default_action(&self, root: &gtk::Box) -> Option<gtk::GestureClick> {
-        let default_action = self.notification.default_action.get();
+        let default_action = self.notification.view.get().actions.default;
         if default_action.is_none() {
             root.set_cursor_from_name(None);
             return None;
@@ -148,20 +155,17 @@ impl NotificationPopupCard {
         root.set_cursor_from_name(Some("pointer"));
 
         let notification = self.notification.clone();
-        let service = self.service.clone();
-        let notif_id = self.notification.id;
-        let close_behavior = self.close_behavior;
+        let source = self.invoke_source();
 
         let click = gtk::GestureClick::new();
         click.connect_released(move |gesture, _, _, _| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
             let notif = notification.clone();
-            match close_behavior {
-                PopupCloseBehavior::Dismiss => service.dismiss_popup(notif_id),
-                PopupCloseBehavior::Remove => notif.dismiss(),
-            }
+            let token = mint_activation_token();
             spawn_local(async move {
-                if let Err(err) = notif.invoke(Action::DEFAULT_ID).await {
+                // `activate_default` dismisses per the popup's close policy (banner-only vs
+                // remove-from-history), honoring `resident`.
+                if let Err(err) = notif.activate_default(source, token.as_deref()).await {
                     tracing::warn!(error = %err, "default action invocation failed");
                 }
             });
@@ -170,29 +174,25 @@ impl NotificationPopupCard {
         Some(click)
     }
 
-    pub(super) fn apply_urgency_class(&self, root: &gtk::Box) {
-        // Idempotent: drop any previously-applied urgency class before adding current.
-        for class in ["low", "normal", "critical"] {
+    pub(super) fn apply_priority_class(&self, root: &gtk::Box) {
+        // Idempotent: drop any previously-applied priority class before adding current.
+        for class in ["low", "normal", "high", "urgent"] {
             root.remove_css_class(class);
         }
-        root.add_css_class(urgency_css_class(self.notification.urgency.get()));
+        root.add_css_class(priority_css_class(
+            self.notification.view.get().classification.priority,
+        ));
     }
 
     /// Re-renders the card in place from the current notification state (icon, app
-    /// label, action buttons, urgency, default-click gesture). Summary/body labels
+    /// label, action buttons, priority, default-click gesture). Summary/body labels
     /// refresh declaratively via `#[watch]`.
     pub(super) fn refresh_notification(&mut self, root: &gtk::Box) {
-        self.resolved_icon = resolve_icon(
-            self.icon_source,
-            &self.notification.app_name.get(),
-            &self.notification.app_icon.get(),
-            &self.notification.image_path.get(),
-            &self.notification.desktop_entry.get(),
-        );
+        self.resolved_icon = resolve_notification_icon(self.icon_source, &self.notification);
         self.app_label = self
             .notification
-            .app_name
-            .get()
+            .view.get().origin
+            .name
             .unwrap_or_else(|| t!("notification-popup-unknown-app"));
 
         if let (Some(icon), Some(container)) = (self.icon.clone(), self.icon_container.clone()) {
@@ -202,8 +202,11 @@ impl NotificationPopupCard {
             self.setup_action_buttons(&actions_box);
         }
 
-        self.apply_urgency_class(root);
-        if urgency_bar_visible(self.notification.urgency.get(), self.urgency_bar) {
+        self.apply_priority_class(root);
+        if priority_bar_visible(
+            self.notification.view.get().classification.priority,
+            self.urgency_bar,
+        ) {
             root.add_css_class("urgency-bar");
         } else {
             root.remove_css_class("urgency-bar");
@@ -223,15 +226,14 @@ impl NotificationPopupCard {
         }
 
         let hover = gtk::EventControllerMotion::new();
-        let service_enter = self.service.clone();
-        let notif_id = self.notification.id;
-        let service_leave = self.service.clone();
+        let notif_enter = self.notification.clone();
+        let notif_leave = self.notification.clone();
 
         hover.connect_enter(move |_, _, _| {
-            service_enter.inhibit_popup(notif_id);
+            notif_enter.inhibit_popup();
         });
         hover.connect_leave(move |_| {
-            service_leave.release_popup(notif_id);
+            notif_leave.release_popup();
         });
         root.add_controller(hover);
     }

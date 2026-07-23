@@ -9,10 +9,7 @@ use wayle_config::schemas::modules::notification::IconSource;
 use wayle_notification::core::notification::Notification;
 
 use self::messages::{NotificationGroupInit, NotificationGroupInput, NotificationGroupOutput};
-use super::notification_item::{
-    NotificationItem,
-    messages::{NotificationItemInput, NotificationItemOutput},
-};
+use super::notification_item::{NotificationItem, messages::NotificationItemInput};
 use crate::i18n::t;
 
 pub(crate) struct NotificationGroup {
@@ -163,12 +160,12 @@ impl FactoryComponent for NotificationGroup {
         }
     }
 
-    fn init_model(init: Self::Init, _index: &Self::Index, sender: FactorySender<Self>) -> Self {
+    fn init_model(init: Self::Init, _index: &Self::Index, _sender: FactorySender<Self>) -> Self {
+        // Items dismiss their own notification directly (the reactive list update then drops
+        // them), so they emit no output and need no forwarding.
         let items = FactoryVecDeque::builder()
             .launch(gtk::Box::default())
-            .forward(sender.input_sender(), |item_output| match item_output {
-                NotificationItemOutput::Dismissed(id) => NotificationGroupInput::ItemDismissed(id),
-            });
+            .detach();
 
         let group_icon = Self::resolve_group_icon(init.icon_source, &init.notifications);
 
@@ -253,25 +250,11 @@ impl FactoryComponent for NotificationGroup {
             }
 
             NotificationGroupInput::ClearGroup => {
-                let ids = self
-                    .notifications
-                    .iter()
-                    .map(|notification| notification.id)
-                    .collect();
                 sender
-                    .output(NotificationGroupOutput::ClearRequested(ids))
+                    .output(NotificationGroupOutput::ClearRequested(
+                        self.notifications.clone(),
+                    ))
                     .ok();
-            }
-
-            NotificationGroupInput::ItemDismissed(id) => {
-                if let Some(notification) = self
-                    .notifications
-                    .iter()
-                    .find(|notification| notification.id == id)
-                {
-                    notification.dismiss();
-                }
-                sender.output(NotificationGroupOutput::Dismissed).ok();
             }
         }
     }

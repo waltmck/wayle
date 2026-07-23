@@ -38,7 +38,7 @@ use std::{
 
 use chrono::Utc;
 use relm4::gtk::{self, prelude::*};
-use tracing::error;
+use tracing::{debug, error, warn};
 use wayle_systray::{
     core::item::TrayItem,
     types::menu::{MenuEvent, MenuItem},
@@ -193,12 +193,40 @@ impl MenuInner {
         self.navigating.set(true);
         match column.submenu_at(index) {
             Some(child) => {
-                column.open_child(&child);
+                if column.open_child(&child) {
+                    self.notify_about_to_show(column, index);
+                    verify_submenu_presented(column, &child, column.row_id(index));
+                }
                 child.close_open_child();
             }
             None => column.close_open_child(),
         }
         self.navigating.set(false);
+    }
+
+    /// Tell the app a submenu is about to be shown (DBusMenu `AboutToShow`), so apps
+    /// that build or refresh submenu contents on demand do so, and re-fetch the layout
+    /// when the app reports it changed (`needsUpdate`). Fired once per submenu open
+    /// (see [`MenuColumn::open_child`]), off the UI thread; a failure (the app doesn't
+    /// implement `AboutToShow`) is expected and only logged.
+    fn notify_about_to_show(&self, column: &Rc<MenuColumn>, index: usize) {
+        let Some(id) = column.row_id(index) else {
+            return;
+        };
+        let item = self.item.clone();
+        tokio::spawn(async move {
+            match item.menu_about_to_show(id).await {
+                // The app repopulated/changed the submenu — pull the fresh layout, which
+                // reconciles the open cascade in place.
+                Ok(true) => {
+                    if let Err(error) = item.refresh_menu().await {
+                        error!(error = %error, id, "cannot refresh menu after AboutToShow");
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => debug!(error = %error, id, "submenu AboutToShow unsupported"),
+            }
+        });
     }
 
     /// The currently-selected `(column, index)`, or `(root, None)` when nothing is
@@ -393,4 +421,57 @@ impl MenuInner {
             None => {}
         }
     }
+}
+
+/// After a submenu is opened, verify a beat later that its popover actually presented.
+///
+/// A submenu is an independent, non-grab nested `xdg_popup`; deep ones (a grandchild
+/// panel — a popover inside a popover inside a popover) intermittently fail to map or
+/// map blank, and because the cascade is persistent (built once, only reconciled) the
+/// failure sticks for the session until it is rebuilt. This is silent in normal use —
+/// it only `warn!`s when a submenu we just popped up is still meant to be showing yet
+/// isn't mapped/sized, i.e. the "nested dropdown panel didn't appear" bug — so it is
+/// safe to ship and gives a reproducer's logs the fingerprint to diagnose it.
+fn verify_submenu_presented(parent: &Rc<MenuColumn>, child: &Rc<MenuColumn>, submenu_id: Option<i32>) {
+    let parent = Rc::downgrade(parent);
+    let child = Rc::downgrade(child);
+    // A generous delay so a merely-slow present is never mistaken for a failure (no
+    // false positives in shipped logs); a genuinely-failed popover stays unmapped.
+    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+        let (Some(parent), Some(child)) = (parent.upgrade(), child.upgrade()) else {
+            return;
+        };
+        // Not an anomaly if the cascade closed or the pointer/keyboard moved to a
+        // different entry (so this submenu was legitimately collapsed) meanwhile.
+        if !parent.popover.is_visible() {
+            return;
+        }
+        let still_open = parent
+            .open_child
+            .borrow()
+            .as_ref()
+            .is_some_and(|open| Rc::ptr_eq(open, &child));
+        if !still_open {
+            return;
+        }
+
+        let popover = &child.popover;
+        let mapped = popover.is_mapped();
+        let content_sized = popover
+            .child()
+            .is_some_and(|content| content.width() > 0 && content.height() > 0);
+        if !mapped || !content_sized {
+            warn!(
+                depth = child.depth,
+                submenu_id = submenu_id.unwrap_or(-1),
+                visible = popover.is_visible(),
+                mapped,
+                content_sized,
+                width = popover.width(),
+                height = popover.height(),
+                "systray submenu was opened but its popover did not present (missing or \
+                 blank nested menu panel) — please report this log and the lines around it",
+            );
+        }
+    });
 }

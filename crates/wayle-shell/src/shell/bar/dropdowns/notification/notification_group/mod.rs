@@ -22,7 +22,7 @@ pub(crate) struct NotificationGroup {
     total_count: usize,
 
     icon_source: IconSource,
-    symbolic_fallback: bool,
+    prefer_color: bool,
     group_icon: Option<String>,
 
     items: FactoryVecDeque<NotificationItem>,
@@ -169,7 +169,7 @@ impl FactoryComponent for NotificationGroup {
             .detach();
 
         let group_icon =
-            Self::resolve_group_icon(init.icon_source, init.symbolic_fallback, &init.notifications);
+            Self::resolve_group_icon(init.icon_source, init.prefer_color, &init.notifications);
 
         let mut model = Self {
             app_name: init.app_name,
@@ -179,7 +179,7 @@ impl FactoryComponent for NotificationGroup {
             overflow_count: 0,
             total_count: 0,
             icon_source: init.icon_source,
-            symbolic_fallback: init.symbolic_fallback,
+            prefer_color: init.prefer_color,
             group_icon,
             items,
             notifications: Vec::new(),
@@ -243,7 +243,7 @@ impl FactoryComponent for NotificationGroup {
 
             NotificationGroupInput::UpdateNotifications(notifications) => {
                 self.group_icon =
-                    Self::resolve_group_icon(self.icon_source, self.symbolic_fallback, &notifications);
+                    Self::resolve_group_icon(self.icon_source, self.prefer_color, &notifications);
                 self.reconcile_items(notifications);
             }
 

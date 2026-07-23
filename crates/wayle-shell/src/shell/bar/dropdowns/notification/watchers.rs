@@ -64,11 +64,11 @@ fn spawn_icon_source_watcher(
     config: &Arc<ConfigService>,
 ) {
     let icon_source = config.config().modules.notifications.icon_source.clone();
-    let symbolic_fallback = config.config().general.symbolic_icon_fallback.clone();
+    let prefer_color = config.config().general.prefer_color_icons.clone();
 
     watch!(
         sender,
-        [icon_source.watch(), symbolic_fallback.watch()],
+        [icon_source.watch(), prefer_color.watch()],
         |out| {
             let _ = out.send(NotificationDropdownCmd::IconSourceChanged);
         }

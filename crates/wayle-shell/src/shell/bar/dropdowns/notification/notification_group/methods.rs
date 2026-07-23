@@ -45,7 +45,7 @@ impl NotificationGroup {
         let inits: Vec<_> = remaining
             .iter()
             .map(|notification| {
-                build_item_init(self.icon_source, self.symbolic_fallback, notification)
+                build_item_init(self.icon_source, self.prefer_color, notification)
             })
             .collect();
 
@@ -61,11 +61,11 @@ impl NotificationGroup {
 
     pub(super) fn resolve_group_icon(
         _icon_source: IconSource,
-        symbolic_fallback: bool,
+        prefer_color: bool,
         notifications: &[Arc<Notification>],
     ) -> Option<String> {
         let first = notifications.first()?;
-        let resolved = resolve_notification_icon(IconSource::Mapped, first, symbolic_fallback);
+        let resolved = resolve_notification_icon(IconSource::Mapped, first, prefer_color);
 
         match resolved {
             ResolvedIcon::Named(name) => Some(name),
@@ -111,7 +111,7 @@ impl NotificationGroup {
         // `visible`. Items whose notification persists keep their existing widget and
         // reactive watchers rather than being destroyed and rebuilt.
         let icon_source = self.icon_source;
-        let symbolic_fallback = self.symbolic_fallback;
+        let prefer_color = self.prefer_color;
         let mut guard = self.items.guard();
 
         for idx in (0..guard.len()).rev() {
@@ -140,7 +140,7 @@ impl NotificationGroup {
                 None => {
                     guard.insert(
                         target_idx,
-                        build_item_init(icon_source, symbolic_fallback, notification),
+                        build_item_init(icon_source, prefer_color, notification),
                     );
                 }
             }
@@ -150,15 +150,15 @@ impl NotificationGroup {
 
 fn build_item_init(
     icon_source: IconSource,
-    symbolic_fallback: bool,
+    prefer_color: bool,
     notification: &Arc<Notification>,
 ) -> NotificationItemInit {
-    let resolved_icon = resolve_notification_icon(icon_source, notification, symbolic_fallback);
+    let resolved_icon = resolve_notification_icon(icon_source, notification, prefer_color);
 
     NotificationItemInit {
         notification: notification.clone(),
         resolved_icon,
         icon_source,
-        symbolic_fallback,
+        prefer_color,
     }
 }

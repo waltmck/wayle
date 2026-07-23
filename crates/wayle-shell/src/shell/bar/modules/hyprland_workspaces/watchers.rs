@@ -22,7 +22,7 @@ pub(super) fn spawn_watchers(
     hyprland: &Option<Arc<HyprlandService>>,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    symbolic_icon_fallback: ConfigProperty<bool>,
+    prefer_color: ConfigProperty<bool>,
     settings: &BarSettings,
 ) {
     spawn_hyprland_watchers(sender, hyprland);
@@ -31,7 +31,7 @@ pub(super) fn spawn_watchers(
         config,
         theme_provider,
         bar_scale,
-        symbolic_icon_fallback,
+        prefer_color,
         settings,
     );
 }
@@ -152,7 +152,7 @@ fn spawn_config_watchers(
     config: &HyprlandWorkspacesConfig,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    symbolic_icon_fallback: ConfigProperty<bool>,
+    prefer_color: ConfigProperty<bool>,
     settings: &BarSettings,
 ) {
     let min_count = config.min_workspace_count.clone();
@@ -216,7 +216,7 @@ fn spawn_config_watchers(
             app_icon_map.watch(),
             theme_provider.watch(),
             bar_scale.watch(),
-            symbolic_icon_fallback.watch(),
+            prefer_color.watch(),
             border_width.watch(),
             border_location.watch(),
             is_vertical.watch()

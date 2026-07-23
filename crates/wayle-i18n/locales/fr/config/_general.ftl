@@ -11,5 +11,5 @@ settings-general-font-mono = Police à chasse fixe
 settings-general-tearing-mode = Mode de déchirement
     .description = Rétrograder les surfaces de superposition pour permettre le déchirement d'écran du compositeur pour les jeux en plein écran
 
-settings-general-symbolic-icon-fallback = Icône symbolique de repli
-    .description = Utiliser l'icône symbolique du bureau d'une application quand aucune icône n'est associée, avant le repli générique
+settings-general-prefer-color-icons = Préférer les icônes en couleur
+    .description = Préférer les icônes en couleur des applications pour les notifications et les espaces de travail, en se repliant sur les icônes symboliques uniquement lorsqu'aucune icône en couleur n'existe

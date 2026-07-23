@@ -23,7 +23,7 @@ pub(super) fn spawn_watchers(
     niri: Arc<NiriService>,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    symbolic_icon_fallback: ConfigProperty<bool>,
+    prefer_color: ConfigProperty<bool>,
     settings: &BarSettings,
 ) {
     spawn_niri_events(sender, niri);
@@ -32,7 +32,7 @@ pub(super) fn spawn_watchers(
         config,
         theme_provider,
         bar_scale,
-        symbolic_icon_fallback,
+        prefer_color,
         settings,
     );
 }
@@ -83,7 +83,7 @@ fn spawn_config_watcher(
     config: &NiriWorkspacesConfig,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    symbolic_icon_fallback: ConfigProperty<bool>,
+    prefer_color: ConfigProperty<bool>,
     settings: &BarSettings,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -91,7 +91,7 @@ fn spawn_config_watcher(
     config.subscribe_changes(tx.clone());
     theme_provider.subscribe_changes(tx.clone());
     bar_scale.subscribe_changes(tx.clone());
-    symbolic_icon_fallback.subscribe_changes(tx.clone());
+    prefer_color.subscribe_changes(tx.clone());
     settings.border_width.subscribe_changes(tx.clone());
     settings.border_location.subscribe_changes(tx.clone());
     settings.is_vertical.subscribe_changes(tx);

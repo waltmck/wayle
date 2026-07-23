@@ -7,7 +7,7 @@ use wayle_config::schemas::modules::{LabelStrategy, WorkspaceStyle};
 
 use crate::{
     glob,
-    shell::bar::icons::{DEFAULT_APP_ICON_MAP, symbolic_desktop_icon},
+    shell::bar::icons::{DEFAULT_APP_ICON_MAP, color_desktop_icon, symbolic_desktop_icon},
 };
 
 const TITLE_PREFIX: &str = "title:";
@@ -90,15 +90,16 @@ pub(super) fn is_ignored(name: Option<&str>, idx: u8, id: u64, patterns: &[Strin
 /// Resolves the icon name for a window using the configured icon map.
 ///
 /// Lookup order: title-prefixed patterns against `title`, then app-prefixed
-/// or unprefixed patterns against `app_id`, then the built-in icon map. When
-/// `symbolic_fallback` is enabled and nothing matched, the app's symbolic
-/// desktop icon is tried before falling back to `fallback`.
+/// or unprefixed patterns against `app_id`. When `prefer_color` is set, the app's
+/// full-colour desktop icon is preferred over the built-in symbolic map; otherwise
+/// the built-in map wins. If nothing matched, the app's symbolic desktop icon is
+/// always tried before falling back to `fallback`.
 pub(super) fn resolve_app_icon(
     app_id: Option<&str>,
     title: Option<&str>,
     user_map: &BTreeMap<String, String>,
     fallback: &str,
-    symbolic_fallback: bool,
+    prefer_color: bool,
 ) -> String {
     let (title_entries, app_entries): (Vec<_>, Vec<_>) = user_map
         .iter()
@@ -118,13 +119,19 @@ pub(super) fn resolve_app_icon(
         return icon.to_string();
     }
 
+    // Prefer the app's full-colour desktop icon over the built-in symbolic mapping when asked.
+    if prefer_color
+        && let Some(color) = color_desktop_icon(app_id)
+    {
+        return color;
+    }
+
     if let Some(icon) = glob::find_match(DEFAULT_APP_ICON_MAP.iter().copied(), app_id) {
         return icon.to_string();
     }
 
-    if symbolic_fallback
-        && let Some(symbolic) = symbolic_desktop_icon(app_id)
-    {
+    // Fall back to the app's symbolic desktop icon if one exists (always attempted).
+    if let Some(symbolic) = symbolic_desktop_icon(app_id) {
         return symbolic;
     }
 

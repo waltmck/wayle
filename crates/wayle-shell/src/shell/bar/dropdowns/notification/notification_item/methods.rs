@@ -145,7 +145,7 @@ impl NotificationItem {
     /// Declarative fields (summary/body/time) refresh via `#[watch]`.
     pub(super) fn refresh_widgets(&mut self) {
         self.resolved_icon =
-            resolve_notification_icon(self.icon_source, &self.notification, self.symbolic_fallback);
+            resolve_notification_icon(self.icon_source, &self.notification, self.prefer_color);
 
         if let (Some(icon), Some(container)) = (self.icon.clone(), self.icon_container.clone()) {
             self.apply_icon(&icon, &container);

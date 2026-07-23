@@ -30,15 +30,16 @@ pub struct GeneralConfig {
     #[default(false)]
     pub tearing_mode: ConfigProperty<bool>,
 
-    /// Fall back to an app's symbolic desktop-entry icon when no icon is mapped.
+    /// Prefer full-colour app icons over symbolic ones for notifications and workspaces.
     ///
-    /// Applies to modules that render per-app icons (notifications, workspaces).
-    /// When enabled and an app matches no hardcoded icon mapping, its desktop
-    /// entry's icon is used if a `-symbolic` variant exists in the icon theme;
-    /// otherwise the module's usual fallback icon is used, as before.
-    #[serde(rename = "symbolic-icon-fallback")]
+    /// When enabled, the notification and workspace modules use an app's colour
+    /// icon when one exists, falling back to a symbolic icon (including the built-in
+    /// symbolic mappings) only when no colour icon is available. When disabled
+    /// (the default), those modules prefer symbolic icons. Either way, modules
+    /// fall back to an app's symbolic desktop-entry icon before the generic icon.
+    #[serde(rename = "prefer-color-icons")]
     #[default(false)]
-    pub symbolic_icon_fallback: ConfigProperty<bool>,
+    pub prefer_color_icons: ConfigProperty<bool>,
 }
 
 impl ModuleInfoProvider for GeneralConfig {

@@ -8,7 +8,7 @@ use wayle_notification::{
     types::Priority,
 };
 
-use crate::shell::bar::icons::{lookup_app_icon, symbolic_desktop_icon};
+use crate::shell::bar::icons::{color_desktop_icon, lookup_app_icon, symbolic_desktop_icon};
 
 const FALLBACK_ICON: &str = "ld-bell-symbolic";
 const MINUTES_PER_HOUR: i64 = 60;
@@ -170,17 +170,17 @@ pub(crate) fn resolve_icon(
     app_icon: &Option<String>,
     image_path: &Option<String>,
     desktop_entry: &Option<String>,
-    symbolic_fallback: bool,
+    prefer_color: bool,
 ) -> ResolvedIcon {
     match icon_source {
-        IconSource::Mapped => mapped_icon(app_name, desktop_entry, symbolic_fallback),
+        IconSource::Mapped => mapped_icon(app_name, desktop_entry, prefer_color),
 
         IconSource::Automatic => {
             if let Some(resolved) = try_icon_string(image_path) {
                 return resolved;
             }
 
-            mapped_icon(app_name, desktop_entry, symbolic_fallback)
+            mapped_icon(app_name, desktop_entry, prefer_color)
         }
 
         IconSource::Application => {
@@ -198,7 +198,7 @@ pub(crate) fn resolve_icon(
                 return ResolvedIcon::Named(entry.clone());
             }
 
-            mapped_icon(app_name, desktop_entry, symbolic_fallback)
+            mapped_icon(app_name, desktop_entry, prefer_color)
         }
     }
 }
@@ -217,14 +217,14 @@ fn image_to_string(image: Option<Image>) -> Option<String> {
 pub(crate) fn resolve_notification_icon(
     icon_source: IconSource,
     notification: &Notification,
-    symbolic_fallback: bool,
+    prefer_color: bool,
 ) -> ResolvedIcon {
     let origin = notification.view.get().origin;
     let name = origin.name;
     let icon = image_to_string(origin.icon);
     let desktop_entry = origin.desktop_entry.map(|entry| entry.as_str().to_owned());
     let image = image_to_string(notification.view.get().image);
-    resolve_icon(icon_source, &name, &icon, &image, &desktop_entry, symbolic_fallback)
+    resolve_icon(icon_source, &name, &icon, &image, &desktop_entry, prefer_color)
 }
 
 /// Classifies a non-empty icon string as either a file path or theme icon name.
@@ -243,17 +243,29 @@ fn try_icon_string(value: &Option<String>) -> Option<ResolvedIcon> {
 fn mapped_icon(
     app_name: &Option<String>,
     desktop_entry: &Option<String>,
-    symbolic_fallback: bool,
+    prefer_color: bool,
 ) -> ResolvedIcon {
+    let identifier = desktop_entry
+        .as_deref()
+        .filter(|entry| !entry.is_empty())
+        .or(app_name.as_deref());
+
+    // When colour icons are preferred, an app's full-colour desktop icon wins over the
+    // built-in symbolic mapping; only if there is none do we fall through to symbolic.
+    if prefer_color
+        && let Some(id) = identifier
+        && let Some(color) = color_desktop_icon(id)
+    {
+        return ResolvedIcon::Named(color);
+    }
+
     if let Some(name) = app_name.as_deref().and_then(lookup_app_icon) {
         return ResolvedIcon::Named(String::from(name));
     }
 
-    if symbolic_fallback
-        && let Some(id) = desktop_entry
-            .as_deref()
-            .filter(|entry| !entry.is_empty())
-            .or(app_name.as_deref())
+    // Fall back to the app's symbolic desktop icon if one exists (previously gated behind
+    // the removed `symbolic-icon-fallback` option — now always attempted).
+    if let Some(id) = identifier
         && let Some(symbolic) = symbolic_desktop_icon(id)
     {
         return ResolvedIcon::Named(symbolic);

@@ -9,7 +9,7 @@ pub(crate) struct NotificationItemInit {
     pub notification: Arc<Notification>,
     pub resolved_icon: ResolvedIcon,
     pub icon_source: IconSource,
-    pub symbolic_fallback: bool,
+    pub prefer_color: bool,
 }
 
 #[derive(Debug)]

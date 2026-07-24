@@ -510,33 +510,15 @@ fn wire_popover(column: &Rc<MenuColumn>, scale: f32, styling_scale: f32) {
         return;
     }
 
-    // Submenus nudge themselves so their first row lines up with the row that opened
-    // them and their card is flush with the parent panel edge. The compositor may FLIP
-    // a submenu to the LEFT of its row near the screen's right edge, and the flush
-    // nudge's direction depends on that resolved side (see `realign_submenu`), which
-    // isn't known until a frame or two after the popup is presented. So re-run the
-    // alignment for a few frames on the frame clock (a tick callback).
-    //
-    // It must NOT re-run from the surface `layout` signal: re-positioning (`set_offset`)
-    // from within layout re-enters layout and spins the frame clock ("layout
-    // continuously requested, giving up after 4 tries"), which leaves the popover
-    // without an allocation and blanks its contents. A tick runs BEFORE layout, so its
-    // `set_offset` just schedules the next frame's layout; `realign_submenu` is
-    // idempotent, and the tick self-terminates after a few frames, so this neither
-    // loops nor accumulates across repeated opens.
-    column.popover.connect_map(move |popover| {
-        realign_submenu(popover, styling_scale);
-        let frames = Cell::new(0u8);
-        popover.add_tick_callback(move |popover, _| {
-            realign_submenu(popover, styling_scale);
-            frames.set(frames.get() + 1);
-            if frames.get() < 4 {
-                glib::ControlFlow::Continue
-            } else {
-                glib::ControlFlow::Break
-            }
-        });
-    });
+    // Submenus nudge themselves on map so their first row lines up with the row that
+    // opened them and their card is flush with the parent panel edge. The flush is
+    // baked into the anchor rect (see `realign_submenu`), so it holds whether the
+    // compositor opens the submenu to the right of the row or flips it to the left, and
+    // survives re-presents (e.g. scrolling the parent) without the popover shifting
+    // sides — no post-placement re-run is needed.
+    column
+        .popover
+        .connect_map(move |popover| realign_submenu(popover, styling_scale));
 
     // When a submenu closes for any reason (Left/Escape, hovering away, or a
     // cascade dismiss), drop the parent's pointer to it so the state stays in
@@ -676,46 +658,43 @@ fn realign_submenu(popover: &gtk::Popover, styling_scale: f32) {
         return;
     };
 
-    // Vertical: line the submenu's top up with the row that opened it. Measure
-    // rather than read `height()`: on `map` the content isn't allocated yet, so
-    // `height()` is 0 and the offset would never apply.
+    // Vertical: line the submenu's top up with the row that opened it. Measure rather
+    // than read `height()`: on `map` the content isn't allocated yet, so `height()` is
+    // 0 and the offset would never apply. This is a purely VERTICAL offset, so it does
+    // not affect the horizontal flip and stays put across re-presents.
     let anchor_height = anchor.height();
     let (_, content_height, _, _) = content.measure(gtk::Orientation::Vertical, -1);
     let offset_y = if anchor_height > 0 && content_height > 0 {
-        // GTK centres the popover on the anchor row; shift it down by half the
-        // height difference so the popover's top sits at the row's top.
+        // GTK centres the popover on the anchor row; shift it down by half the height
+        // difference so the popover's top sits at the row's top.
         (content_height - anchor_height) / 2
     } else {
         0
     };
+    popover.set_offset(0, offset_y);
 
-    // Horizontal: shift the submenu out so its card is flush with the parent panel's
-    // edge instead of tucking under the parent row button (see `SUBMENU_FLUSH_REM`).
-    // The nudge follows the side the submenu ACTUALLY opened on: GTK opens it to the
-    // right of the row, but the compositor FLIPS it to the left when the screen's right
-    // edge is too close. A right-opening submenu is nudged right (+); a flipped
-    // left-opening one must be nudged left (−), or the same outward nudge would push it
-    // INTO the parent (overlap). The resolved side is read from the popup's surface
-    // anchor once positioned — `West` for a right-opening submenu, `East` once flipped
-    // to the left. Before placement it reads the default (right); the surface-layout
-    // re-run wired in `wire_popover` corrects it after the compositor has flipped it.
-    let magnitude = (SUBMENU_FLUSH_REM * REM_PX * styling_scale).round() as i32;
-    let opened_left = popover
-        .surface()
-        .and_downcast::<gdk::Popup>()
-        .is_some_and(|popup| {
-            matches!(
-                popup.surface_anchor(),
-                gdk::Gravity::East | gdk::Gravity::NorthEast | gdk::Gravity::SouthEast
-            )
-        });
-    let offset_x = if opened_left { -magnitude } else { magnitude };
-
-    // Idempotent: only re-position when the offset actually changes, so the
-    // surface-layout re-run (which fires on every layout) converges instead of looping
-    // set_offset -> relayout -> set_offset.
-    if popover.offset() != (offset_x, offset_y) {
-        popover.set_offset(offset_x, offset_y);
+    // Horizontal flush, flip-safe. A submenu opens to the RIGHT of its row, but the
+    // compositor FLIPS it to the LEFT near the screen's right edge; either way its card
+    // should sit flush with the parent panel edge, not tuck under the row button (see
+    // `SUBMENU_FLUSH_REM`).
+    //
+    // Achieve this by widening the anchor RECT symmetrically by the flush amount, NOT
+    // with a positioner offset. A horizontal offset shifts the popup, which biases the
+    // compositor's flip decision: on any re-present (e.g. scrolling the parent moves the
+    // anchor) it re-solves, un-flips the popup, and the now-wrong-direction offset drags
+    // it over the parent — the side then oscillates. A widened rect is stable: the popup
+    // anchors flush at the rect's right edge opening right and at its left edge when
+    // flipped left, the flip mirrors it automatically, and the rect never depends on the
+    // resolved side, so re-presents change nothing.
+    let anchor_width = anchor.width();
+    if anchor_width > 0 && anchor_height > 0 {
+        let flush = (SUBMENU_FLUSH_REM * REM_PX * styling_scale).round() as i32;
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(
+            -flush,
+            0,
+            anchor_width + 2 * flush,
+            anchor_height,
+        )));
     }
 }
 

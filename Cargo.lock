@@ -4970,6 +4970,7 @@ dependencies = [
  "console",
  "evdev",
  "futures",
+ "gdk-pixbuf",
  "gdk4",
  "gio-unix",
  "glob",

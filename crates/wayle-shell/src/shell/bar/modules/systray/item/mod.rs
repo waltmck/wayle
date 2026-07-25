@@ -30,7 +30,9 @@ pub(super) struct SystrayItem {
     config: Arc<ConfigService>,
     button: Option<gtk::Button>,
     icon: Option<gtk::Image>,
+    icon_signature: Option<IconSignature>,
     icon_color_provider: Option<gtk::CssProvider>,
+    icon_color_provider_attached: bool,
     /// The cached cascade, pre-built off the click path when the layout arrives (see
     /// `rebuild_cached_menu`) so a click only shows it. Reused across open/close
     /// cycles and rebuilt only when the layout changes.
@@ -47,6 +49,14 @@ pub(super) struct SystrayItem {
     /// popover's `connect_closed` or an explicit teardown, whichever flips it first.
     menu_reg: Option<(DismissFn, Rc<Cell<bool>>)>,
     cancel_token: CancellationToken,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum IconSignature {
+    File(String),
+    Named(String),
+    Pixmap(u64),
+    Fallback,
 }
 
 #[derive(Debug)]
@@ -103,7 +113,9 @@ impl FactoryComponent for SystrayItem {
             config: init.config,
             button: None,
             icon: None,
+            icon_signature: None,
             icon_color_provider: None,
+            icon_color_provider_attached: false,
             menu: None,
             displayed_menu: None,
             coordinator: init.coordinator,

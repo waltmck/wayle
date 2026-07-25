@@ -1,0 +1,55 @@
+name: Cachix
+
+# Fork-only. Builds the (DO-NOT-UPSTREAM) Nix flake — which pins the
+# wayle-services crates to waltmck's fork — and pushes every store path built
+# during the job to the "waltmck" cachix cache. Needs the CACHIX_AUTH_TOKEN
+# secret, configured on the fork. The cache has no signing key, so cachix
+# authenticates and signs with the auth token alone.
+
+on:
+    push:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    cachix:
+        name: Build & push (${{ matrix.system }})
+        # Only run where the cache secret exists; skip on upstream / other forks.
+        if: github.repository == 'waltmck/wayle'
+        runs-on: ${{ matrix.runner }}
+        strategy:
+            # Don't let one arch's failure cancel the other's push.
+            fail-fast: false
+            matrix:
+                include:
+                    - system: x86_64-linux
+                      runner: ubuntu-latest
+                    - system: aarch64-linux
+                      runner: ubuntu-24.04-arm
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Install Nix
+              uses: cachix/install-nix-action@v31
+              with:
+                  extra_nix_config: |
+                      experimental-features = nix-command flakes
+                  # Avoids GitHub API rate limits while fetching the installer.
+                  github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+            # Adds "waltmck" as a substituter and installs a post-build hook, so
+            # anything built after this step is pushed to the cache automatically.
+            - name: Configure Cachix
+              uses: cachix/cachix-action@v17
+              with:
+                  name: waltmck
+                  authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+            - name: Build flake
+              run: nix build .#packages.${{ matrix.system }}.default --print-build-logs

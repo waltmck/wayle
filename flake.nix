@@ -32,11 +32,28 @@
     # source. `overrideAttrs` can't touch `cargoHash` (buildRustPackage consumes
     # it to build `cargoDeps` before the derivation exists), so re-vendor this
     # checkout's lockfile explicitly via fetchCargoVendor.
-    mkWayle = pkgs:
+    mkWayle = pkgs: let
+      # Only the files the build actually reads. Source-irrelevant commits
+      # (docs, README, CI, flake/devenv, packaging, scripts, formatter configs,
+      # preview assets) then leave the derivation hash unchanged, so the prebuilt
+      # binary is substituted from the cache instead of recompiled. Extend this
+      # list if the build ever grows a new top-level input.
+      src = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./.cargo # cargo config (aliases today; may gain [build]/[target] settings)
+          ./crates # workspace crates + their locales/scss/embedded resources
+          ./wayle # the wayle / wayle-settings binary crate
+          ./resources # icons, wayle.portal, wayle-settings.svg (install phase)
+        ];
+      };
+    in
       pkgs.wayle.overrideAttrs (old: {
-        src = self;
+        inherit src;
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
-          src = self;
+          inherit src;
           hash = cargoHash;
         };
 
@@ -92,6 +109,8 @@
       options.services.wayle = {
         enable = mkEnableOption "wayle";
 
+        useCache = mkEnableOption "the waltmck cachix binary cache, so the wayle package (and its fork-pinned deps) is substituted as a prebuilt binary instead of compiled from source";
+
         settings = mkOption {
           inherit (pkgs.formats.toml {}) type;
 
@@ -143,6 +162,14 @@
       };
 
       config = mkIf cfg.enable {
+        # Pull the wayle package (and its fork-pinned deps) from the waltmck
+        # cachix cache rather than compiling it. These lists concatenate with
+        # nixpkgs' defaults, so cache.nixos.org is preserved.
+        nix.settings = mkIf cfg.useCache {
+          substituters = ["https://waltmck.cachix.org"];
+          trusted-public-keys = ["waltmck.cachix.org-1:jRubmCo4HVNZsnL8+GgsMLaOyi+pMLSuC5/QjYDjWW0="];
+        };
+
         # Default required dependencies
         services.wayle.deps = with pkgs; [
           cfg.package

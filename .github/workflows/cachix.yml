@@ -3,8 +3,8 @@ name: Cachix
 # Fork-only. Builds the (DO-NOT-UPSTREAM) Nix flake — which pins the
 # wayle-services crates to waltmck's fork — and pushes every store path built
 # during the job to the "waltmck" cachix cache. Needs the CACHIX_AUTH_TOKEN
-# secret, configured on the fork. The cache has no signing key, so cachix
-# authenticates and signs with the auth token alone.
+# repository secret. The cache has no signing key, so cachix authenticates and
+# signs with the auth token alone.
 
 on:
     push:

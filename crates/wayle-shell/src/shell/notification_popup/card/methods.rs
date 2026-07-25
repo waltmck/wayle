@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use relm4::{gtk, spawn_local};
+use relm4::{gtk, gtk::gio, spawn_local};
 use wayle_config::schemas::modules::notification::{PopupCloseBehavior, UrgencyBarThreshold};
 use wayle_notification::core::types::{Action, InvokeSource};
 
@@ -7,10 +7,12 @@ use super::NotificationPopupCard;
 use crate::{
     i18n::t,
     shell::notification_popup::helpers::{
-        RelativeTime, ResolvedIcon, cached_texture, mint_activation_token, priority_bar_visible,
-        priority_css_class, resolve_notification_icon,
+        RelativeTime, ResolvedIcon, load_scaled_file_icon, mint_activation_token,
+        priority_bar_visible, priority_css_class, resolve_notification_icon,
     },
 };
+
+const POPUP_ICON_TEXTURE_SIZE_PX: i32 = 64;
 
 impl NotificationPopupCard {
     pub(super) fn apply_css_classes(
@@ -43,14 +45,26 @@ impl NotificationPopupCard {
             }
 
             ResolvedIcon::File(path) => {
-                // Share one reference-counted texture across every notification using this
-                // image instead of loading a separate copy per widget; fall back to a
-                // direct load if the file can't be decoded into a texture.
-                match cached_texture(path) {
-                    Some(texture) => icon.set_paintable(Some(&texture)),
-                    None => icon.set_from_file(Some(path)),
-                }
-                icon_container.add_css_class("file-icon");
+                let path = path.clone();
+                let icon = icon.clone();
+                let icon_container = icon_container.clone();
+
+                spawn_local(async move {
+                    let texture = gio::spawn_blocking(move || {
+                        load_scaled_file_icon(&path, POPUP_ICON_TEXTURE_SIZE_PX)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+
+                    let Some(texture) = texture else {
+                        icon.set_icon_name(Some("ld-bell-symbolic"));
+                        return;
+                    };
+
+                    icon.set_paintable(Some(&texture));
+                    icon_container.add_css_class("file-icon");
+                });
             }
         }
     }

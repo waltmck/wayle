@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use relm4::gtk::{gdk, gio, glib, pango, prelude::*};
@@ -247,33 +247,15 @@ fn mapped_icon(app_name: &Option<String>) -> ResolvedIcon {
     ResolvedIcon::Named(String::from(name))
 }
 
-thread_local! {
-    /// Main-thread cache of notification image textures, keyed by file path and holding
-    /// only weak references. Many notifications rendering the same (content-addressed)
-    /// image file share one reference-counted [`gdk::Texture`] — a single copy of the
-    /// pixels in memory — and it's freed once no widget references it, then reloaded on
-    /// demand. Themed (`Named`) icons don't need this; GTK's `IconTheme` already shares
-    /// them.
-    static TEXTURE_CACHE: RefCell<HashMap<String, glib::WeakRef<gdk::Texture>>> =
-        RefCell::new(HashMap::new());
-}
+/// Loads a file-based icon as a scaled texture to avoid keeping oversized
+/// image allocations alive when notifications provide large images.
+pub(crate) fn load_scaled_file_icon(path: &str, target_px: i32) -> Option<gdk::Texture> {
+    if path.is_empty() {
+        return None;
+    }
 
-/// Returns a shared [`gdk::Texture`] for the image at `path`, loading it at most once
-/// while it is in use so notifications sharing an image don't each hold their own copy.
-/// Returns `None` if the file can't be decoded.
-pub(crate) fn cached_texture(path: &str) -> Option<gdk::Texture> {
-    TEXTURE_CACHE.with(|cache| {
-        let existing = cache.borrow().get(path).and_then(|weak| weak.upgrade());
-        if let Some(texture) = existing {
-            return Some(texture);
-        }
-
-        let texture = gdk::Texture::from_filename(path).ok()?;
-        cache
-            .borrow_mut()
-            .insert(path.to_owned(), texture.downgrade());
-        Some(texture)
-    })
+    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(path, target_px, target_px, true).ok()?;
+    Some(gdk::Texture::for_pixbuf(&pixbuf))
 }
 
 #[cfg(test)]

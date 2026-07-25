@@ -6,12 +6,13 @@ use super::NotificationItem;
 use crate::{
     i18n::t,
     shell::notification_popup::helpers::{
-        RelativeTime, ResolvedIcon, cached_texture, mint_activation_token, priority_css_class,
-        resolve_notification_icon,
+        RelativeTime, ResolvedIcon, load_scaled_file_icon, mint_activation_token,
+        priority_css_class, resolve_notification_icon,
     },
 };
 
 const MAX_ACTIONS_PER_ROW: usize = 3;
+const DROPDOWN_ICON_TEXTURE_SIZE_PX: i32 = 48;
 
 impl NotificationItem {
     pub(super) fn apply_icon(&self, icon: &gtk::Image, icon_container: &gtk::Box) {
@@ -29,14 +30,12 @@ impl NotificationItem {
             }
 
             ResolvedIcon::File(path) => {
-                // Share one reference-counted texture across every notification using this
-                // image instead of loading a separate copy per widget; fall back to a
-                // direct load if the file can't be decoded into a texture.
-                match cached_texture(path) {
-                    Some(texture) => icon.set_paintable(Some(&texture)),
-                    None => icon.set_from_file(Some(path)),
+                if let Some(texture) = load_scaled_file_icon(path, DROPDOWN_ICON_TEXTURE_SIZE_PX) {
+                    icon.set_paintable(Some(&texture));
+                    icon_container.add_css_class("file-icon");
+                } else {
+                    icon.set_icon_name(Some("ld-bell-symbolic"));
                 }
-                icon_container.add_css_class("file-icon");
             }
         }
     }

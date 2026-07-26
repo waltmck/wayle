@@ -103,6 +103,10 @@ notification portal so notifications work from Flatpaks — no home-manager requ
           services.wayle = {
             enable = true;
 
+            # Fetch the prebuilt wayle binary from the waltmck Cachix cache
+            # instead of compiling it from source (see "Binary cache" below).
+            useCache = true;
+
             # Your config.toml as Nix; generated to /etc/wayle/config.toml and passed via --config.
             settings = {
               # general.symbolic-icon-fallback = true;
@@ -130,12 +134,37 @@ notification portal so notifications work from Flatpaks — no home-manager requ
 | `enable` | bool | `false` | Install Wayle and run it as a user service. |
 | `settings` | TOML (attrset) | `{}` | Written to `/etc/wayle/config.toml`; the shell starts with `--config`. |
 | `package` | package | this flake's `wayle` | Read-only; the fork build (bundles `wayle.portal`). |
+| `useCache` | bool | `false` | Add the `waltmck` Cachix cache as a substituter so `package` is fetched prebuilt instead of compiled — see the note below. |
 | `deps` | list of package | `[]` | Added to the service's `PATH`. |
 | `iconThemes` | list of package | `[]` | Their `share/` directories are appended to `XDG_DATA_DIRS`. |
 
 When enabled the module also sets `xdg.portal.extraPortals` and selects Wayle as the
 `org.freedesktop.impl.portal.Notification` backend. That only takes effect with
 `xdg.portal.enable = true`, which you must set yourself (shown above).
+
+#### Binary cache
+
+Setting `useCache = true` adds the [`waltmck` Cachix cache](https://waltmck.cachix.org)
+as a Nix substituter (and trusts its public key), so the wayle package is fetched
+prebuilt instead of compiled from source. It is *appended* to your substituters, so
+`cache.nixos.org` is preserved.
+
+This actually hits the cache because `services.wayle.package` is the flake's own
+pre-built output — built with Wayle's pinned nixpkgs, which is the exact derivation CI
+pushes to the cache. A wayle rebuilt against a *different* nixpkgs (e.g. via the overlay)
+gets a different store path and misses.
+
+Note the bootstrap: the substituter only becomes active *after* the rebuild that turns
+`useCache` on, so the very first `nixos-rebuild switch` still builds from source. Do that
+first switch once with
+
+```bash
+nixos-rebuild switch --flake … \
+  --option extra-substituters      https://waltmck.cachix.org \
+  --option extra-trusted-public-keys waltmck.cachix.org-1:jRubmCo4HVNZsnL8+GgsMLaOyi+pMLSuC5/QjYDjWW0=
+```
+
+or simply switch a second time afterward, and subsequent rebuilds fetch from the cache.
 
 ### NixOS (package only)
 

@@ -103,7 +103,11 @@
       ...
     }: let
       cfg = config.services.wayle;
-      wayle = mkWayle pkgs;
+      # Use the flake's pre-built package — built with wayle's *pinned* nixpkgs,
+      # which is exactly what CI builds and pushes to cachix. Rebuilding via
+      # `mkWayle pkgs` here would use the CONSUMER's nixpkgs, producing a
+      # different store path that isn't in the cache (so `useCache` would miss).
+      wayle = self.packages.${pkgs.system}.default;
       inherit (lib) mkEnableOption mkIf mkOption types;
     in {
       options.services.wayle = {

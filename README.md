@@ -33,11 +33,11 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
     - `wayle systray {open, toggle}` functions similarly, opening/closing systray right-click menus by ID.
     - The above open/toggle/close commands all act on the currently active monitor by default (this is determined in a compositor-specific way; they act on all monitors as a fallback). This can be overridden by passing `--monitor=<name>` (to act on a specific monitor) or `--monitor=all` (to act on all monitors).
 - Better heuristics to reduce button resize jitter. [339](https://github.com/wayle-rs/wayle/pull/339)
+- Module for Mullvad VPN control/status. [341](https://github.com/wayle-rs/wayle/pull/341) [43](https://github.com/wayle-rs/wayle-services/pull/43)
 
 Roadmap:
 - Squash bugs in Media module's mpris2 controls [#156](https://github.com/wayle-rs/wayle/issues/156)
 - Implement modules:
-  - Mullvad (status, connect, disconnect, select relay). Daemon is controllable over dbus interface.
   - Syncthing (sync status, etc.)
   - systemd-networkd (exposes dbus API to get/set status of managed interfaces). Need to think about how this can/should interface with Network module
   - ZFS (pool status, dataset usage, health)

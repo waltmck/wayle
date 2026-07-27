@@ -7,6 +7,7 @@ mod coordinator;
 mod dashboard;
 mod iwd;
 mod media;
+mod mullvad;
 mod network;
 mod notification;
 mod registry;
@@ -174,6 +175,7 @@ register_dropdowns! {
     "dashboard" => dashboard::Factory,
     "iwd" => iwd::Factory,
     "media" => media::Factory,
+    "mullvad" => mullvad::Factory,
     "network" => network::Factory,
     "notification" => notification::Factory,
     "weather" => weather::Factory,

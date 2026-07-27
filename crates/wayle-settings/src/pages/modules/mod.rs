@@ -17,6 +17,7 @@ mod keyboard_input;
 mod mango_workspaces;
 mod media;
 mod microphone;
+mod mullvad;
 mod netstat;
 mod network;
 mod niri_workspaces;
@@ -54,6 +55,7 @@ pub(crate) fn factories() -> Vec<fn(&Config) -> LeafEntry> {
         mango_workspaces::entry,
         media::entry,
         microphone::entry,
+        mullvad::entry,
         netstat::entry,
         network::entry,
         niri_workspaces::entry,

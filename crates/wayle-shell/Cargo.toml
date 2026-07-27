@@ -54,6 +54,7 @@ wayle-idle-inhibit.workspace = true
 wayle-iwd.workspace = true
 wayle-mango.workspace = true
 wayle-media.workspace = true
+wayle-mullvad.workspace = true
 wayle-niri.workspace = true
 wayle-network.workspace = true
 wayle-notification.workspace = true

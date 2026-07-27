@@ -15,6 +15,14 @@ bar-iwd-disconnected = Disconnected
 bar-iwd-wifi-fallback = WiFi
 bar-iwd-no-wifi = No WiFi
 
+## Mullvad
+bar-mullvad-connecting = Connecting...
+bar-mullvad-disconnecting = Disconnecting...
+bar-mullvad-disconnected = Disconnected
+bar-mullvad-connected = Connected
+bar-mullvad-blocked = Blocked
+bar-mullvad-logged-out = Logged out
+
 ## Battery
 bar-battery-unavailable = N/A
 

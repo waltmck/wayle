@@ -1,0 +1,156 @@
+// Edge inset matches wayle-iwd: keep the default `.dropdown-content` padding
+// (var(--space-sm) + var(--space-xs) = 0.75rem) rather than the notification
+// dropdown's tighter 0.5rem inset, so no padding/margin override here.
+
+// Section labels ("Current connection" / "Available relays"): the first is
+// flush; one that follows an elevated surface gets a var(--space-lg) gap above
+// it — matching iwd's active-connection -> "Available" spacing.
+.mullvad-content .section-label {
+    margin-top: 0;
+}
+
+.mullvad-content .card + .section-label {
+    margin-top: var(--space-lg);
+}
+
+// Status-colored flag square on the current-connection card (iwd pattern):
+// rounded square via the base `.network-connection-icon`, with a translucent
+// status-tinted background and matching icon color per state.
+.network-connection-icon {
+    &.mullvad-connected {
+        background: var(--status-success-subtle);
+
+        image {
+            margin: calc(var(--space-sm) + var(--space-xs));
+            -gtk-icon-size: var(--icon-md);
+            color: var(--status-success);
+        }
+    }
+
+    &.mullvad-connecting {
+        background: var(--status-warning-subtle);
+
+        image {
+            margin: calc(var(--space-sm) + var(--space-xs));
+            -gtk-icon-size: var(--icon-md);
+            color: var(--status-warning);
+        }
+    }
+
+    &.mullvad-disconnected {
+        background: var(--accent-subtle);
+
+        image {
+            margin: calc(var(--space-sm) + var(--space-xs));
+            -gtk-icon-size: var(--icon-md);
+            color: var(--accent);
+        }
+    }
+
+    &.mullvad-blocked {
+        background: var(--status-error-subtle);
+
+        image {
+            margin: calc(var(--space-sm) + var(--space-xs));
+            -gtk-icon-size: var(--icon-md);
+            color: var(--status-error);
+        }
+    }
+}
+
+.mullvad-list-scroll {
+    background: transparent;
+}
+
+.mullvad-list {
+    padding: 0;
+
+    .mullvad-country + .mullvad-country {
+        border-top: 1px solid var(--border-subtle);
+    }
+}
+
+// Country / city expandable rows share the flat "expand" button look.
+button.mullvad-expand {
+    all: unset;
+    padding: var(--space-sm);
+    transition: background var(--duration-fast);
+
+    &:hover {
+        background: var(--bg-overlay);
+    }
+}
+
+image.mullvad-country-flag {
+    -gtk-icon-size: var(--icon-lg);
+    margin-right: var(--space-md);
+    margin-left: var(--space-sm);
+}
+
+.mullvad-country-name {
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+    color: var(--fg-default);
+}
+
+.mullvad-city-name {
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+    color: var(--fg-muted);
+}
+
+// Select: a hover-revealed pill floating on top of the row (right-aligned),
+// mirroring the connect/disconnect button on the current-connection card.
+button.mullvad-select-btn {
+    all: unset;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+    color: var(--accent);
+    background: var(--accent-subtle);
+    border-radius: var(--rounding-element);
+    padding: var(--space-xs) var(--space-sm);
+    margin-right: var(--space-sm);
+
+    &:hover {
+        color: var(--accent-hover);
+    }
+}
+
+.mullvad-cities {
+    .mullvad-city + .mullvad-city {
+        border-top: 1px solid var(--border-subtle);
+    }
+}
+
+// Show the country -> city -> relay tree via CONTENT indentation (padding-left
+// inside the row), so each button — and its hover highlight — still spans the
+// full width of the list, flush to the left like its parent country button.
+.mullvad-city .mullvad-expand {
+    padding-left: calc(var(--space-sm) + var(--space-lg));
+}
+
+button.mullvad-relay-item {
+    all: unset;
+    padding: var(--space-xs) var(--space-sm);
+    padding-left: calc(var(--space-sm) + var(--space-lg) * 2);
+    transition: background var(--duration-fast);
+
+    &:hover {
+        background: var(--bg-overlay);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+    }
+}
+
+.mullvad-relay-name {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--fg-subtle);
+}
+
+button.network-action-toggle {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+}

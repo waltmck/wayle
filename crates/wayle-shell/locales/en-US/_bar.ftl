@@ -9,6 +9,14 @@ bar-network-no-wifi = No WiFi
 bar-network-no-ethernet = No Ethernet
 bar-network-offline = Offline
 
+## Mullvad
+bar-mullvad-connecting = Connecting...
+bar-mullvad-disconnecting = Disconnecting...
+bar-mullvad-disconnected = Disconnected
+bar-mullvad-connected = Connected
+bar-mullvad-blocked = Blocked
+bar-mullvad-logged-out = Logged out
+
 ## Battery
 bar-battery-unavailable = N/A
 

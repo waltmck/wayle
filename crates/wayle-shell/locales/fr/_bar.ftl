@@ -22,6 +22,7 @@ bar-mullvad-disconnected = Déconnecté
 bar-mullvad-connected = Connecté
 bar-mullvad-blocked = Bloqué
 bar-mullvad-logged-out = Déconnecté du compte
+bar-mullvad-revoked = Appareil révoqué
 
 ## Batterie
 bar-battery-unavailable = N/D

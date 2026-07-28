@@ -22,6 +22,7 @@ bar-mullvad-disconnected = Disconnected
 bar-mullvad-connected = Connected
 bar-mullvad-blocked = Blocked
 bar-mullvad-logged-out = Logged out
+bar-mullvad-revoked = Revoked
 
 ## Battery
 bar-battery-unavailable = N/A

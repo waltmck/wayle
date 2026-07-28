@@ -21,7 +21,6 @@ pub(crate) enum MullvadDropdownMsg {
 pub(crate) enum MullvadDropdownCmd {
     ServiceReady(Arc<MullvadService>),
     ScaleChanged(f32),
-    LoggedInChanged,
     RelaysChanged,
     TunnelChanged,
 }

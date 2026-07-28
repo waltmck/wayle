@@ -13,17 +13,34 @@
     margin-top: var(--space-lg);
 }
 
+// Country flags render at one shared size in both the pinned current-connection
+// card and the relay list.
+$flag-icon-size: var(--icon-lg);
+
 // Status-colored flag square on the current-connection card (iwd pattern):
 // rounded square via the base `.network-connection-icon`, with a translucent
-// status-tinted background and matching icon color per state.
-.network-connection-icon {
+// status-tinted background and matching icon color per state. Scoped under
+// `.mullvad-content` so the shared `image` sizing below outranks the network
+// module's global `.network-connection-icon image { --icon-sm }` (same-name
+// class, reused here) — which would otherwise shrink the flag.
+.mullvad-content .network-connection-icon {
+    // Flag/globe sizing shared across all states (only the tint differs by
+    // state below); kept equal to the relay-list flags. A tight margin keeps the
+    // box (and the card height) compact now that the flag is `--icon-lg` — the
+    // larger flag fills more of the box, leaving less whitespace.
+    image {
+        margin: var(--space-sm);
+        -gtk-icon-size: $flag-icon-size;
+    }
+
+    // Connected: align with IWD's connected signal icon (base
+    // `.network-connection-icon.wifi`/`.ethernet` both use `--accent`), so a
+    // connected VPN and a connected link read the same.
     &.mullvad-connected {
-        background: var(--status-success-subtle);
+        background: var(--accent-subtle);
 
         image {
-            margin: calc(var(--space-sm) + var(--space-xs));
-            -gtk-icon-size: var(--icon-md);
-            color: var(--status-success);
+            color: var(--accent);
         }
     }
 
@@ -31,19 +48,17 @@
         background: var(--status-warning-subtle);
 
         image {
-            margin: calc(var(--space-sm) + var(--space-xs));
-            -gtk-icon-size: var(--icon-md);
             color: var(--status-warning);
         }
     }
 
+    // Disconnected: a neutral/muted "off" tint — deliberately NOT `--accent`,
+    // which now means "connected" (above) and matches IWD's connected icon.
     &.mullvad-disconnected {
-        background: var(--accent-subtle);
+        background: color-mix(in srgb, var(--fg-muted) 15%, transparent);
 
         image {
-            margin: calc(var(--space-sm) + var(--space-xs));
-            -gtk-icon-size: var(--icon-md);
-            color: var(--accent);
+            color: var(--fg-muted);
         }
     }
 
@@ -51,8 +66,6 @@
         background: var(--status-error-subtle);
 
         image {
-            margin: calc(var(--space-sm) + var(--space-xs));
-            -gtk-icon-size: var(--icon-md);
             color: var(--status-error);
         }
     }
@@ -82,7 +95,8 @@ button.mullvad-expand {
 }
 
 image.mullvad-country-flag {
-    -gtk-icon-size: var(--icon-lg);
+    // Same size as the pinned current-connection flag (see `$flag-icon-size`).
+    -gtk-icon-size: $flag-icon-size;
     margin-right: var(--space-md);
     margin-left: var(--space-sm);
 }

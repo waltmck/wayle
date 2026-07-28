@@ -5,7 +5,7 @@ use wayle_mullvad::{MullvadNetwork, NetworkTarget};
 use super::relay_item::{RelayItem, RelayItemInit, RelayItemOutput};
 use crate::i18n::t;
 
-/// A city node: expands to a list of relays, or connects to the city directly.
+/// A city node: expands to a list of relays, or selects the city directly.
 pub(super) struct CityItem {
     name: String,
     target: NetworkTarget,
@@ -31,7 +31,7 @@ pub(super) enum CityItemInput {
 
 #[derive(Debug)]
 pub(super) enum CityItemOutput {
-    Connect(NetworkTarget),
+    Select(NetworkTarget),
     Expanded(DynamicIndex),
 }
 
@@ -102,7 +102,7 @@ impl FactoryComponent for CityItem {
                 guard.push_back(RelayItemInit {
                     hostname: relay.hostname.clone(),
                     active: relay.active,
-                    target: NetworkTarget::network(
+                    target: NetworkTarget::relay(
                         relay.country_code,
                         relay.city_code,
                         relay.hostname,
@@ -134,7 +134,7 @@ impl FactoryComponent for CityItem {
         let target = self.target.clone();
         let out = sender.output_sender().clone();
         widgets.select_btn.connect_clicked(move |_| {
-            out.emit(CityItemOutput::Connect(target.clone()));
+            out.emit(CityItemOutput::Select(target.clone()));
         });
 
         let hover = gtk::EventControllerMotion::new();
@@ -173,7 +173,7 @@ impl FactoryComponent for CityItem {
                 self.expanded = false;
             }
             CityItemInput::RelaySelected(target) => {
-                let _ = sender.output(CityItemOutput::Connect(target));
+                let _ = sender.output(CityItemOutput::Select(target));
             }
         }
     }

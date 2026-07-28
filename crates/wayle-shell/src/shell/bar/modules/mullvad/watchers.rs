@@ -51,20 +51,9 @@ pub(super) fn spawn_state_watchers(
     token: CancellationToken,
     mullvad: &Arc<MullvadService>,
 ) {
-    let logged_in = mullvad.mullvad.logged_in.clone();
-    let connection_state = mullvad.mullvad.connection_state.clone();
-    let connected_network = mullvad.mullvad.connected_network.clone();
+    let status = mullvad.mullvad.status.clone();
 
-    watch_cancellable!(
-        sender,
-        token,
-        [
-            logged_in.watch(),
-            connection_state.watch(),
-            connected_network.watch()
-        ],
-        |out| {
-            let _ = out.send(MullvadCmd::StateChanged);
-        }
-    );
+    watch_cancellable!(sender, token, [status.watch()], |out| {
+        let _ = out.send(MullvadCmd::StateChanged);
+    });
 }

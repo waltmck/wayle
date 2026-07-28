@@ -1,23 +1,25 @@
 use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
-use wayle_mullvad::{ConnectionState, TunnelStatus};
+use wayle_mullvad::{ConnectionStatus, ErrorCause, RelayLocation};
 use wayle_widgets::prelude::*;
 
 use super::helpers;
 use crate::i18n::t;
 
-/// The pinned "current connection" card at the top of the dropdown. Displays
-/// the active relay + status inside its own elevated surface, and swaps the
-/// status for a connect/disconnect button on hover. The flag sits in a square
-/// whose background color reflects the connection status.
+/// The pinned "selected relay" card at the top of the dropdown. Shows the
+/// active relay when a tunnel is up, otherwise the selected relay that a connect
+/// would use, inside its own elevated surface — swapping the status for a
+/// connect/disconnect button on hover. The flag sits in a square whose
+/// background color reflects the connection status.
 pub(super) struct CurrentConnection {
-    status: TunnelStatus,
+    status: ConnectionStatus,
+    selected: Option<RelayLocation>,
     hovered: bool,
 }
 
 #[derive(Debug)]
 pub(super) enum CurrentConnectionInput {
-    SetStatus(TunnelStatus),
+    SetState(ConnectionStatus, Option<RelayLocation>),
     Hovered(bool),
     ActionClicked,
 }
@@ -28,42 +30,42 @@ pub(crate) enum CurrentConnectionOutput {
 }
 
 impl CurrentConnection {
+    /// The relay to display: the active relay while connecting/connected, else
+    /// the selected relay (the one a connect would use).
+    fn relay(&self) -> Option<&RelayLocation> {
+        self.status.relay().or(self.selected.as_ref())
+    }
+
     fn flag(&self) -> String {
-        self.status
-            .network
-            .as_ref()
-            .and_then(|network| network.hostname.as_deref())
-            .and_then(helpers::country_code_from_hostname)
-            .map_or_else(
-                || helpers::FLAG_FALLBACK.to_string(),
-                |code| helpers::flag_icon(&code),
-            )
+        self.relay()
+            .map(|relay| relay.country_code.as_str())
+            .filter(|code| !code.is_empty())
+            .map_or_else(|| helpers::FLAG_FALLBACK.to_string(), helpers::flag_icon)
     }
 
     fn title(&self) -> String {
-        match &self.status.network {
-            Some(network) => match &network.city {
-                Some(city) if !city.is_empty() => format!("{city}, {}", network.country),
-                _ => network.country.clone(),
+        match self.relay() {
+            Some(relay) => match &relay.city {
+                Some(city) if !city.is_empty() => format!("{city}, {}", relay.country),
+                _ => relay.country.clone(),
             },
-            // No relay yet: keep the title coherent with the transitional state
-            // rather than always showing "Not connected".
-            None => match self.status.state {
-                ConnectionState::Connecting => t!("dropdown-mullvad-connecting"),
-                ConnectionState::Disconnecting => t!("dropdown-mullvad-disconnecting"),
-                ConnectionState::Error => t!("dropdown-mullvad-blocked"),
-                ConnectionState::Connected | ConnectionState::Disconnected => {
-                    t!("dropdown-mullvad-not-connected")
-                }
+            // No relay to show: a transitional label, or "no relay selected"
+            // when there is no geographic selection.
+            None => match &self.status {
+                ConnectionStatus::Connecting(_) => t!("dropdown-mullvad-connecting"),
+                ConnectionStatus::Disconnecting => t!("dropdown-mullvad-disconnecting"),
+                ConnectionStatus::Error(_) => t!("dropdown-mullvad-blocked"),
+                ConnectionStatus::Connected(_)
+                | ConnectionStatus::Disconnected
+                | ConnectionStatus::LoggedOut
+                | ConnectionStatus::Revoked => t!("dropdown-mullvad-not-connected"),
             },
         }
     }
 
     fn subtitle(&self) -> String {
-        self.status
-            .network
-            .as_ref()
-            .and_then(|network| network.hostname.clone())
+        self.relay()
+            .and_then(|relay| relay.hostname.clone())
             .unwrap_or_default()
     }
 
@@ -72,18 +74,23 @@ impl CurrentConnection {
     }
 
     fn status_label(&self) -> String {
-        match self.status.state {
-            ConnectionState::Connected => t!("dropdown-mullvad-connected"),
-            ConnectionState::Connecting => t!("dropdown-mullvad-connecting"),
-            ConnectionState::Disconnecting => t!("dropdown-mullvad-disconnecting"),
-            ConnectionState::Disconnected => t!("dropdown-mullvad-disconnected"),
-            ConnectionState::Error => t!("dropdown-mullvad-blocked"),
+        match &self.status {
+            ConnectionStatus::Connected(_) => t!("dropdown-mullvad-connected"),
+            ConnectionStatus::Connecting(_) => t!("dropdown-mullvad-connecting"),
+            ConnectionStatus::Disconnecting => t!("dropdown-mullvad-disconnecting"),
+            ConnectionStatus::Disconnected => t!("dropdown-mullvad-disconnected"),
+            ConnectionStatus::Error(cause) => error_label(*cause),
+            // These render behind their own empty states, so the body is hidden;
+            // fall back to a neutral label for exhaustiveness.
+            ConnectionStatus::LoggedOut | ConnectionStatus::Revoked => {
+                t!("dropdown-mullvad-disconnected")
+            }
         }
     }
 
     fn action_label(&self) -> String {
-        match self.status.state {
-            ConnectionState::Disconnected => t!("dropdown-mullvad-connect"),
+        match &self.status {
+            ConnectionStatus::Disconnected => t!("dropdown-mullvad-connect"),
             _ => t!("dropdown-mullvad-disconnect"),
         }
     }
@@ -91,21 +98,34 @@ impl CurrentConnection {
     /// Classes for the flag square: the base class plus a status modifier that
     /// selects the background/foreground color (see the SCSS).
     fn icon_classes(&self) -> Vec<&'static str> {
-        let modifier = match self.status.state {
-            ConnectionState::Connected => "mullvad-connected",
-            ConnectionState::Connecting | ConnectionState::Disconnecting => "mullvad-connecting",
-            ConnectionState::Disconnected => "mullvad-disconnected",
-            ConnectionState::Error => "mullvad-blocked",
+        let modifier = match &self.status {
+            ConnectionStatus::Connected(_) => "mullvad-connected",
+            ConnectionStatus::Connecting(_) | ConnectionStatus::Disconnecting => {
+                "mullvad-connecting"
+            }
+            ConnectionStatus::Disconnected
+            | ConnectionStatus::LoggedOut
+            | ConnectionStatus::Revoked => "mullvad-disconnected",
+            ConnectionStatus::Error(_) => "mullvad-blocked",
         };
         vec!["network-connection-icon", modifier]
     }
 
     fn status_classes(&self) -> Vec<&'static str> {
-        if matches!(self.status.state, ConnectionState::Error) {
+        if matches!(self.status, ConnectionStatus::Error(_)) {
             vec!["network-connection-status", "error"]
         } else {
             vec!["network-connection-status"]
         }
+    }
+}
+
+/// Translated label for a blocking/error cause.
+fn error_label(cause: ErrorCause) -> String {
+    match cause {
+        ErrorCause::AuthFailed => t!("dropdown-mullvad-error-auth"),
+        ErrorCause::Offline => t!("dropdown-mullvad-error-offline"),
+        ErrorCause::Other => t!("dropdown-mullvad-blocked"),
     }
 }
 
@@ -213,7 +233,8 @@ impl Component for CurrentConnection {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = Self {
-            status: TunnelStatus::default(),
+            status: ConnectionStatus::default(),
+            selected: None,
             hovered: false,
         };
         let widgets = view_output!();
@@ -242,7 +263,10 @@ impl Component for CurrentConnection {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
-            CurrentConnectionInput::SetStatus(status) => self.status = status,
+            CurrentConnectionInput::SetState(status, selected) => {
+                self.status = status;
+                self.selected = selected;
+            }
             CurrentConnectionInput::Hovered(hovered) => self.hovered = hovered,
             CurrentConnectionInput::ActionClicked => {
                 let _ = sender.output(CurrentConnectionOutput::ToggleRequested);

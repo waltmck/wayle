@@ -8,8 +8,8 @@ use super::{
 };
 use crate::i18n::t;
 
-/// A country node: expands to a list of cities, or connects to the country
-/// directly (the daemon then picks a relay).
+/// A country node: expands to a list of cities, or selects the country
+/// directly (the daemon then picks a relay within it).
 pub(super) struct CountryItem {
     name: String,
     flag: String,
@@ -31,13 +31,13 @@ pub(super) enum CountryItemInput {
     ToggleExpanded,
     Hovered(bool),
     Collapse,
-    CityConnect(NetworkTarget),
+    CitySelect(NetworkTarget),
     CityExpanded(DynamicIndex),
 }
 
 #[derive(Debug)]
 pub(crate) enum CountryItemOutput {
-    Connect(NetworkTarget),
+    Select(NetworkTarget),
     Expanded(DynamicIndex),
 }
 
@@ -108,7 +108,7 @@ impl FactoryComponent for CountryItem {
         let mut cities = FactoryVecDeque::builder()
             .launch(gtk::Box::default())
             .forward(sender.input_sender(), |out| match out {
-                CityItemOutput::Connect(target) => CountryItemInput::CityConnect(target),
+                CityItemOutput::Select(target) => CountryItemInput::CitySelect(target),
                 CityItemOutput::Expanded(index) => CountryItemInput::CityExpanded(index),
             });
 
@@ -147,7 +147,7 @@ impl FactoryComponent for CountryItem {
         let target = self.target.clone();
         let out = sender.output_sender().clone();
         widgets.select_btn.connect_clicked(move |_| {
-            out.emit(CountryItemOutput::Connect(target.clone()));
+            out.emit(CountryItemOutput::Select(target.clone()));
         });
 
         let hover = gtk::EventControllerMotion::new();
@@ -196,8 +196,8 @@ impl FactoryComponent for CountryItem {
                     }
                 }
             }
-            CountryItemInput::CityConnect(target) => {
-                let _ = sender.output(CountryItemOutput::Connect(target));
+            CountryItemInput::CitySelect(target) => {
+                let _ = sender.output(CountryItemOutput::Select(target));
             }
         }
     }

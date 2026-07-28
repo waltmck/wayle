@@ -10,7 +10,7 @@ use gtk::prelude::*;
 use relm4::prelude::*;
 use wayle_config::{ClickAction, ConfigProperty, ConfigService, schemas::styling::CssToken};
 use wayle_core::DeferredService;
-use wayle_mullvad::{ConnectionState, MullvadService};
+use wayle_mullvad::{ConnectionStatus, MullvadService};
 use wayle_widgets::{
     WatcherToken,
     prelude::{BarButton, BarButtonBehavior, BarButtonColors, BarButtonInit, BarButtonOutput},
@@ -141,16 +141,18 @@ impl Component for MullvadModule {
 }
 
 impl MullvadModule {
-    /// Best-effort connect/disconnect toggle: reconnect (using the daemon's
-    /// current relay settings) when disconnected, otherwise disconnect. The
-    /// calls are queued by the service, so this is non-blocking.
+    /// Best-effort connect/disconnect toggle: connect to the daemon's selected
+    /// relay when disconnected, disconnect otherwise, and do nothing without a
+    /// logged-in account. The calls are queued by the service, so non-blocking.
     fn toggle(&self) {
         let Some(service) = self.mullvad.get() else {
             return;
         };
 
-        match service.mullvad.connection_state.get() {
-            ConnectionState::Disconnected => service.mullvad.reconnect(),
+        match service.mullvad.status.get() {
+            ConnectionStatus::Disconnected => service.mullvad.connect(),
+            // Nothing to toggle without a logged-in account.
+            ConnectionStatus::LoggedOut | ConnectionStatus::Revoked => {}
             _ => service.mullvad.disconnect(),
         }
     }

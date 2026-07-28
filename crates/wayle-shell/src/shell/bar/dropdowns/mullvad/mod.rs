@@ -10,7 +10,7 @@ mod watchers;
 
 use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
-use wayle_mullvad::{ConnectionState, MullvadService, NetworkTarget};
+use wayle_mullvad::{ConnectionStatus, MullvadService, NetworkTarget};
 use wayle_widgets::{WatcherToken, prelude::*};
 
 pub(super) use self::factory::Factory;
@@ -29,7 +29,7 @@ pub(crate) struct MullvadDropdown {
     scaled_width: i32,
     scaled_height: i32,
     ready: bool,
-    logged_in: bool,
+    status: ConnectionStatus,
     current: Controller<CurrentConnection>,
     countries: FactoryVecDeque<CountryItem>,
     state_watcher: WatcherToken,
@@ -97,7 +97,7 @@ impl Component for MullvadDropdown {
                     #[template]
                     EmptyState {
                         #[watch]
-                        set_visible: model.ready && !model.logged_in,
+                        set_visible: model.ready && model.logged_out(),
                         #[template_child]
                         icon {
                             set_icon_name: Some("network-vpn-disabled-symbolic"),
@@ -112,12 +112,31 @@ impl Component for MullvadDropdown {
                         },
                     },
 
+                    #[name = "empty_revoked"]
+                    #[template]
+                    EmptyState {
+                        #[watch]
+                        set_visible: model.ready && model.revoked(),
+                        #[template_child]
+                        icon {
+                            set_icon_name: Some("network-vpn-disabled-symbolic"),
+                        },
+                        #[template_child]
+                        title {
+                            set_label: &t!("dropdown-mullvad-revoked-title"),
+                        },
+                        #[template_child]
+                        description {
+                            set_label: &t!("dropdown-mullvad-revoked-description"),
+                        },
+                    },
+
                     gtk::Box {
                         add_css_class: "mullvad-body",
                         set_orientation: gtk::Orientation::Vertical,
                         set_vexpand: true,
                         #[watch]
-                        set_visible: model.ready && model.logged_in,
+                        set_visible: model.ready && model.account_active(),
 
                         gtk::Label {
                             add_css_class: "section-label",
@@ -180,7 +199,7 @@ impl Component for MullvadDropdown {
             scaled_width: scaled_dimension(BASE_WIDTH, scale),
             scaled_height: scaled_dimension(BASE_HEIGHT, scale),
             ready: false,
-            logged_in: false,
+            status: ConnectionStatus::default(),
             current,
             countries,
             state_watcher: WatcherToken::new(),
@@ -195,8 +214,8 @@ impl Component for MullvadDropdown {
 
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
-            MullvadDropdownMsg::Country(CountryItemOutput::Connect(target)) => {
-                self.connect(&target);
+            MullvadDropdownMsg::Country(CountryItemOutput::Select(target)) => {
+                self.select(&target);
             }
             MullvadDropdownMsg::Country(CountryItemOutput::Expanded(index)) => {
                 let expanded = index.current_index();
@@ -221,7 +240,7 @@ impl Component for MullvadDropdown {
         match msg {
             MullvadDropdownCmd::ServiceReady(service) => {
                 self.ready = true;
-                self.logged_in = service.mullvad.logged_in.get();
+                self.status = service.mullvad.status.get();
 
                 let token = self.state_watcher.reset();
                 watchers::spawn_state_watchers(&sender, token, &service);
@@ -236,15 +255,13 @@ impl Component for MullvadDropdown {
                 self.scaled_width = scaled_dimension(BASE_WIDTH, scale);
                 self.scaled_height = scaled_dimension(BASE_HEIGHT, scale);
             }
-            MullvadDropdownCmd::LoggedInChanged => {
-                if let Some(service) = &self.mullvad {
-                    self.logged_in = service.mullvad.logged_in.get();
-                }
-            }
             MullvadDropdownCmd::RelaysChanged => {
                 self.rebuild_countries();
             }
             MullvadDropdownCmd::TunnelChanged => {
+                if let Some(service) = &self.mullvad {
+                    self.status = service.mullvad.status.get();
+                }
                 self.push_status();
             }
         }
@@ -252,20 +269,42 @@ impl Component for MullvadDropdown {
 }
 
 impl MullvadDropdown {
-    /// Queues a connect to `target` (non-blocking; serialized by the service).
-    fn connect(&self, target: &NetworkTarget) {
+    /// Whether no account is logged in (drives the logged-out empty state).
+    fn logged_out(&self) -> bool {
+        matches!(self.status, ConnectionStatus::LoggedOut)
+    }
+
+    /// Whether the account's device was revoked (drives the revoked empty state).
+    fn revoked(&self) -> bool {
+        matches!(self.status, ConnectionStatus::Revoked)
+    }
+
+    /// Whether an account is usable (logged in, not revoked) — drives the main
+    /// body with the relay list.
+    fn account_active(&self) -> bool {
+        !self.logged_out() && !self.revoked()
+    }
+
+    /// Selects `target` as the relay location without connecting. The daemon
+    /// persists it and — if a tunnel is already up — reconnects to it; while
+    /// disconnected it just becomes the location a later connect will use. The
+    /// current-connection card's action button is how the user actually
+    /// connects. Non-blocking.
+    fn select(&self, target: &NetworkTarget) {
         if let Some(service) = &self.mullvad {
-            service.mullvad.connect(target);
+            service.mullvad.select(target);
         }
     }
 
-    /// Reconnect when disconnected, otherwise disconnect (non-blocking).
+    /// Connect when disconnected, otherwise disconnect (non-blocking). A no-op
+    /// without a logged-in account.
     fn toggle(&self) {
         let Some(service) = &self.mullvad else {
             return;
         };
-        match service.mullvad.connection_state.get() {
-            ConnectionState::Disconnected => service.mullvad.reconnect(),
+        match service.mullvad.status.get() {
+            ConnectionStatus::Disconnected => service.mullvad.connect(),
+            ConnectionStatus::LoggedOut | ConnectionStatus::Revoked => {}
             _ => service.mullvad.disconnect(),
         }
     }

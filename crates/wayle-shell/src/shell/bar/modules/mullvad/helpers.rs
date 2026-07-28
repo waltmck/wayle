@@ -1,44 +1,38 @@
 use wayle_config::schemas::modules::MullvadConfig;
-use wayle_mullvad::{ConnectedNetwork, ConnectionState};
+use wayle_mullvad::ConnectionStatus;
 
 use crate::i18n::t;
 
-pub(crate) struct MullvadContext {
-    pub(crate) logged_in: bool,
-    pub(crate) state: ConnectionState,
-    pub(crate) network: Option<ConnectedNetwork>,
-}
-
-pub(crate) fn select_icon(config: &MullvadConfig, ctx: &MullvadContext) -> String {
-    if !ctx.logged_in {
-        return config.disabled_icon.get().clone();
-    }
-
-    match ctx.state {
-        ConnectionState::Connected => config.connected_icon.get().clone(),
-        ConnectionState::Connecting | ConnectionState::Disconnecting => {
+/// Picks the configured icon name for the current status. `LoggedOut`/`Revoked`
+/// (the account can't tunnel) use the disabled icon; `Error` uses the blocked icon.
+pub(crate) fn select_icon(config: &MullvadConfig, status: &ConnectionStatus) -> String {
+    match status {
+        ConnectionStatus::LoggedOut | ConnectionStatus::Revoked => {
+            config.disabled_icon.get().clone()
+        }
+        ConnectionStatus::Connected(_) => config.connected_icon.get().clone(),
+        ConnectionStatus::Connecting(_) | ConnectionStatus::Disconnecting => {
             config.connecting_icon.get().clone()
         }
-        ConnectionState::Disconnected => config.disconnected_icon.get().clone(),
-        ConnectionState::Error => config.blocked_icon.get().clone(),
+        ConnectionStatus::Disconnected => config.disconnected_icon.get().clone(),
+        ConnectionStatus::Error(_) => config.blocked_icon.get().clone(),
     }
 }
 
-pub(crate) fn format_label(ctx: &MullvadContext) -> String {
-    if !ctx.logged_in {
-        return t!("bar-mullvad-logged-out");
-    }
-
-    match ctx.state {
-        ConnectionState::Connected => ctx
-            .network
-            .as_ref()
-            .and_then(|network| network.city.clone())
+/// The short bar label for the current status. When connected, prefers the relay
+/// city; otherwise a translated status word.
+pub(crate) fn format_label(status: &ConnectionStatus) -> String {
+    match status {
+        ConnectionStatus::LoggedOut => t!("bar-mullvad-logged-out"),
+        ConnectionStatus::Revoked => t!("bar-mullvad-revoked"),
+        ConnectionStatus::Connected(relay) => relay
+            .city
+            .clone()
             .filter(|city| !city.is_empty())
             .unwrap_or_else(|| t!("bar-mullvad-connected")),
-        ConnectionState::Connecting => t!("bar-mullvad-connecting"),
-        ConnectionState::Disconnecting => t!("bar-mullvad-disconnecting"),
-        ConnectionState::Disconnected => t!("bar-mullvad-disconnected"),
-        ConnectionState::Error => t!("bar-mullvad-blocked"),
+        ConnectionStatus::Connecting(_) => t!("bar-mullvad-connecting"),
+        ConnectionStatus::Disconnecting => t!("bar-mullvad-disconnecting"),
+        ConnectionStatus::Disconnected => t!("bar-mullvad-disconnected"),
+        ConnectionStatus::Error(_) => t!("bar-mullvad-blocked"),
     }
 }

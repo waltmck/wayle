@@ -1,5 +1,4 @@
 use relm4::ComponentController;
-use wayle_mullvad::TunnelStatus;
 
 use super::{
     MullvadDropdown, country_item::CountryItemInit, current_connection::CurrentConnectionInput,
@@ -26,16 +25,16 @@ impl MullvadDropdown {
         }
     }
 
-    /// Pushes the current tunnel status into the pinned current-connection card.
+    /// Pushes the current connection status + selected relay into the pinned
+    /// card (the crate resolves both to display-ready names).
     pub(super) fn push_status(&self) {
         let Some(service) = &self.mullvad else {
             return;
         };
 
-        let status = TunnelStatus {
-            state: service.mullvad.connection_state.get(),
-            network: service.mullvad.connected_network.get(),
-        };
-        self.current.emit(CurrentConnectionInput::SetStatus(status));
+        self.current.emit(CurrentConnectionInput::SetState(
+            service.mullvad.status.get(),
+            service.mullvad.selected.get(),
+        ));
     }
 }

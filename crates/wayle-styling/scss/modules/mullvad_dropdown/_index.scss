@@ -17,6 +17,15 @@
 // card and the relay list.
 $flag-icon-size: var(--icon-lg);
 
+// Padding around the flag inside the current-connection badge, derived so the
+// badge stays 2.75rem square regardless of the flag size — matching the base
+// `--icon-md` box (`--icon-md` + 2·(`--space-sm` + `--space-xs`) = 2.75rem, the
+// network dropdown's connection-icon box). margin = (2.75rem − flag) / 2. Kept
+// scale-aware (every term scales with `--global-scale`).
+$flag-box-margin: calc(
+    var(--icon-md) * 0.5 + var(--space-sm) + var(--space-xs) - var(--icon-lg) * 0.5
+);
+
 // Status-colored flag square on the current-connection card (iwd pattern):
 // rounded square via the base `.network-connection-icon`, with a translucent
 // status-tinted background and matching icon color per state. Scoped under
@@ -25,11 +34,11 @@ $flag-icon-size: var(--icon-lg);
 // class, reused here) — which would otherwise shrink the flag.
 .mullvad-content .network-connection-icon {
     // Flag/globe sizing shared across all states (only the tint differs by
-    // state below); kept equal to the relay-list flags. A tight margin keeps the
-    // box (and the card height) compact now that the flag is `--icon-lg` — the
-    // larger flag fills more of the box, leaving less whitespace.
+    // state below); kept equal to the relay-list flags. `$flag-box-margin` holds
+    // the box at 2.75rem square despite the larger `--icon-lg` flag, so the card
+    // height doesn't grow.
     image {
-        margin: var(--space-sm);
+        margin: $flag-box-margin;
         -gtk-icon-size: $flag-icon-size;
     }
 

@@ -591,14 +591,33 @@ fn wire_row(inner: &Rc<MenuInner>, column: &Rc<MenuColumn>, row: &MenuRow) {
             if inner.pointer_pos.replace(Some(pos)) == Some(pos) {
                 return;
             }
-            // Real move: on the transition out of keyboard nav, snap to the row under
-            // the pointer once; further motion is a cheap no-op (crossings are handled
-            // by `connect_enter`).
-            if inner.keyboard_nav.replace(false)
-                && let (Some(column), Some(button)) = (column.upgrade(), button.upgrade())
+            // Real move: the pointer owns the selection now — end keyboard nav and
+            // select the row it is over. This usually just duplicates `connect_enter`
+            // (a no-op when the row is already selected), but it is ALSO the only path
+            // that selects when `enter` never fires: after the popover closes and
+            // reopens under a stationary pointer, wlroots leaves the crossing state
+            // stale ("inside" the row it closed over), so moving onto that row produces
+            // motion events but no fresh `enter` until the pointer leaves and re-enters.
+            inner.keyboard_nav.set(false);
+            if let (Some(column), Some(button)) = (column.upgrade(), button.upgrade())
                 && let Some(index) = column.index_of_button(&button)
             {
                 inner.hover_row(&column, index);
+            }
+        }
+    });
+    // De-hovering a row deselects it (unless it opens a submenu — see `hover_leave`),
+    // so a highlighted button never stays highlighted once the pointer moves off it.
+    motion.connect_leave({
+        let inner = Rc::downgrade(inner);
+        let column = Rc::downgrade(column);
+        let button = row.button.downgrade();
+        move |_| {
+            if let (Some(inner), Some(column), Some(button)) =
+                (inner.upgrade(), column.upgrade(), button.upgrade())
+                && let Some(index) = column.index_of_button(&button)
+            {
+                inner.hover_leave(&column, index);
             }
         }
     });

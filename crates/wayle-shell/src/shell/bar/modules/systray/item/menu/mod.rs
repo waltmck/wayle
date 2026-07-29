@@ -92,7 +92,9 @@ impl TrayMenu {
     }
 
     pub(super) fn popup(&self) {
-        self.inner.reset(&self.root);
+        // No reset here: the selection is cleared on CLOSE (see the root popover's
+        // `connect_closed` in `build`), so the cascade is already collapsed with nothing
+        // selected before it reopens — and a freshly built cascade starts that way too.
         self.root.popover.popup();
     }
 
@@ -161,7 +163,36 @@ pub(super) fn build(
 
     construct::wire_columns(&inner, &root);
 
+    // Deselect whenever the menu closes, so no `.selected` button lingers on the cached
+    // (reused) surface. Clearing it here — while hidden — means the button's fade-out
+    // `transition` runs invisibly; clearing it on the next OPEN instead (as a lone
+    // `popup`-time reset does) makes that fade flash for a frame as the popover appears.
+    // Weak refs avoid a cycle: the popover lives inside `root`.
+    root.popover.connect_closed({
+        let inner = Rc::downgrade(&inner);
+        let root = Rc::downgrade(&root);
+        move |_| {
+            if let (Some(inner), Some(root)) = (inner.upgrade(), root.upgrade()) {
+                inner.reset(&root);
+            }
+        }
+    });
+
     TrayMenu { inner, root }
+}
+
+/// Follow the open-submenu chain from `root` to the deepest column whose popover is
+/// currently open (returns `root` itself when no submenu is open) — the level a fresh
+/// keyboard nav starts in (see [`MenuInner::active`]).
+fn deepest_open_column(root: &Rc<MenuColumn>) -> Rc<MenuColumn> {
+    let mut column = root.clone();
+    loop {
+        let child = column.open_child.borrow().clone();
+        match child {
+            Some(child) if child.popover.is_visible() => column = child,
+            _ => return column,
+        }
+    }
 }
 
 impl MenuInner {
@@ -240,7 +271,11 @@ impl MenuInner {
                 let index = column.cursor.get();
                 (column, index)
             }
-            _ => (root.clone(), None),
+            // Nothing selected: start in the DEEPEST currently-open submenu rather than
+            // the root. A submenu can be open with nothing selected once the pointer has
+            // left the row that opened it (see `hover_leave`), and the first nav key
+            // should drop into the level the user is actually looking at.
+            _ => (deepest_open_column(root), None),
         }
     }
 
@@ -255,6 +290,36 @@ impl MenuInner {
         self.select(column, index, false);
     }
 
+    /// The pointer left row `index` of `column`: deselect it, so a button never stays
+    /// highlighted once the mouse is off it — INCLUDING a submenu row. For a submenu row
+    /// only the `.selected` highlight is cleared; its submenu is left OPEN (the pointer
+    /// may be heading into it), because [`MenuColumn::set_selected`] touches only the
+    /// cursor/highlight, never `open_child`. A row that is no longer THE selection is
+    /// left alone (the pointer already crossed onto and selected another row — leaving
+    /// the old one must not clear the new one). Skipped during keyboard nav, where a row
+    /// scrolling out from under a stationary pointer fires a synthetic leave that must
+    /// not clear the keyboard cursor.
+    fn hover_leave(&self, column: &Rc<MenuColumn>, index: usize) {
+        // Ignore SYNTHETIC leaves so only a real pointer leave clears the selection:
+        // during keyboard nav (a row scrolling out from under a stationary pointer) and
+        // while a structural change is in flight or the column is closing (a popping-down
+        // submenu sliding rows under the pointer).
+        if self.keyboard_nav.get() || self.navigating.get() || !column.popover.is_visible() {
+            return;
+        }
+        let selected_here = self
+            .selected
+            .borrow()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|selected| Rc::ptr_eq(&selected, column))
+            && column.cursor.get() == Some(index);
+        if selected_here {
+            column.set_selected(None);
+            *self.selected.borrow_mut() = None;
+        }
+    }
+
     fn activate_leaf(&self, id: i32) {
         let item = self.item.clone();
         tokio::spawn(async move {
@@ -266,7 +331,9 @@ impl MenuInner {
         self.root_popover.popdown();
     }
 
-    /// Collapse to the root with nothing selected, for a fresh popup.
+    /// Collapse to the root with nothing selected. Run when the menu closes (see the
+    /// root popover's `connect_closed` in `build`), so the cached cascade is already
+    /// clean — no lingering `.selected` highlight to fade in as it reopens.
     fn reset(&self, root: &Rc<MenuColumn>) {
         let previous = self.selected.borrow().as_ref().and_then(Weak::upgrade);
         if let Some(prev_column) = previous {

@@ -15,5 +15,5 @@ pub async fn connect() -> Result<(Connection, ShellIpcProxy<'static>), String> {
 
 /// Transforms zbus errors into user-friendly messages.
 pub fn format_error(operation: &str, error: ZbusError) -> String {
-    dbus::format_shell_error(operation, error)
+    dbus::format_ipc_error(operation, error)
 }

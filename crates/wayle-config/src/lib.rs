@@ -20,8 +20,8 @@ pub use dropdown_sources::DropdownSources;
 pub use enum_variants::{EnumVariant, EnumVariants};
 pub use property::{
     ApplyConfigLayer, ApplyRuntimeLayer, ClearAllRuntime, ClearRuntimeByPath, CommitConfigReload,
-    ConfigProperty, ExtractRuntimeValues, ResetConfigLayer, ResetRuntimeLayer, SubscribeChanges,
-    ValueSource,
+    ConfigProperty, ExtractRuntimeValues, Removed, ResetConfigLayer, ResetRuntimeLayer,
+    SubscribeChanges, ValueSource,
 };
 
 /// Configuration schema definitions.

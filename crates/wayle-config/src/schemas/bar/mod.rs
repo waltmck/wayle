@@ -10,7 +10,7 @@ pub use types::{
 use wayle_derive::wayle_config;
 
 use crate::{
-    ConfigProperty,
+    ConfigProperty, Removed,
     docs::{ConfigGroup, ModuleInfo, ModuleInfoProvider},
     schemas::{
         general::Layer,
@@ -248,6 +248,13 @@ pub struct BarConfig {
     #[serde(rename = "dropdown-freeze-label")]
     #[default(true)]
     pub dropdown_freeze_label: ConfigProperty<bool>,
+
+    /// REMOVED: dropdowns now always dismiss on an outside click. A stale
+    /// `dropdown-autohide` still in a config warns at load; it has no effect.
+    #[wayle(deprecated("dropdowns now always dismiss on outside click"))]
+    #[serde(rename = "dropdown-autohide", skip_serializing)]
+    #[schemars(skip)]
+    pub dropdown_autohide: Removed<bool>,
 }
 
 impl ModuleInfoProvider for BarConfig {

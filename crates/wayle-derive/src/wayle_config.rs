@@ -5,7 +5,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Fields, FieldsNamed, ItemStruct, parse_macro_input};
 
-use crate::field_utils::{I18nAttr, extract_default_attr, extract_i18n_attr, serde_key};
+use crate::field_utils::{
+    I18nAttr, deprecated_note, extract_default_attr, extract_i18n_attr, serde_key,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConfigType {
@@ -220,7 +222,11 @@ fn process_fields(fields: &FieldsNamed, i18n_prefix: Option<&str>) -> syn::Resul
                     .is_ok_and(|list| list.tokens.to_string().contains("skip"))
         });
 
-        if !is_config_property && !is_wayle_skipped {
+        // A `#[wayle(deprecated("..."))]` field is a `Removed<T>` marker, not a nested
+        // config container — exclude it so no `all_i18n_keys()` is generated for it.
+        let is_removed = deprecated_note(field).is_some();
+
+        if !is_config_property && !is_wayle_skipped && !is_removed {
             output
                 .container_fields
                 .push((field_ident.clone(), field_type.clone()));

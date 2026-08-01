@@ -1,7 +1,12 @@
 //! Reactive state for shell IPC.
 
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
+use wayle_audio::core::device::{input::InputDevice, output::OutputDevice};
+use wayle_brightness::BacklightDevice;
 use wayle_core::Property;
 
 /// What a dropdown request asks the bars to do.
@@ -127,6 +132,38 @@ pub struct ShellIpcState {
     /// from its actual dropdown openers. This is the source of truth for
     /// `wayle dropdown list` — no config walk, no central module→dropdown table.
     pub dropdown_ids: Property<BTreeMap<String, Vec<String>>>,
+
+    /// Most recent CLI request to display an OSD, or `None` before the first
+    /// request. Written with [`Property::replace`] so repeat requests for an
+    /// unchanged device still notify.
+    pub osd_request: Property<Option<OsdRequest>>,
+}
+
+/// A CLI request to display an OSD for an already-resolved device.
+#[derive(Debug, Clone)]
+pub struct OsdRequest {
+    /// Monotonic counter, starting at 1.
+    ///
+    /// [`Property::watch`] replays the current value to every new subscriber,
+    /// so consumers track the sequence they have seen and ignore anything at
+    /// or below it.
+    pub seq: u64,
+
+    /// Device to display.
+    pub device: OsdDevice,
+}
+
+/// A device the OSD can report on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OsdDevice {
+    /// Output device volume and mute state.
+    Speaker(Arc<OutputDevice>),
+
+    /// Input device volume and mute state.
+    Microphone(Arc<InputDevice>),
+
+    /// Backlight device brightness.
+    Brightness(Arc<BacklightDevice>),
 }
 
 impl ShellIpcState {
@@ -137,6 +174,7 @@ impl ShellIpcState {
             dropdown_request: Property::new(Vec::new()),
             systray_menu_request: Property::new(Vec::new()),
             dropdown_ids: Property::new(BTreeMap::new()),
+            osd_request: Property::new(None),
         }
     }
 }

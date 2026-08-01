@@ -164,7 +164,14 @@ pub async fn init_services(
         optional.mango.clone(),
     );
 
-    let shell_ipc = match ShellIpcService::new(active_monitor).await {
+    let shell_ipc = match ShellIpcService::new(
+        active_monitor,
+        Arc::clone(&config_service),
+        daemons.audio.clone(),
+        core.brightness.clone(),
+    )
+    .await
+    {
         Ok(service) => Arc::new(service),
         Err(err) => {
             warn!(error = %err, "Shell IPC service unavailable");

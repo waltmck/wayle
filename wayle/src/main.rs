@@ -45,6 +45,7 @@ fn main() {
             Commands::Icons { command } => cli::icons::execute(command).await,
             Commands::Media { command } => cli::media::execute(command).await,
             Commands::Notify { command } => cli::notify::execute(command).await,
+            Commands::Osd { command } => cli::osd::execute(command).await,
             Commands::Panel { command } => cli::panel::execute(command).await,
             Commands::Dropdown { command } => cli::dropdown::execute(command).await,
             Commands::Power { command } => cli::power::execute(command).await,

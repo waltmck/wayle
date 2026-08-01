@@ -14,7 +14,7 @@ pub async fn session() -> Result<Connection, String> {
 }
 
 /// Creates a `ShellIpcProxy` (`com.wayle.Shell1`) for shell commands (bar
-/// visibility, dropdown list/toggle, systray open, …).
+/// visibility, dropdown list/toggle, systray open, OSD show, …).
 ///
 /// # Errors
 /// Returns error if the D-Bus connection or proxy creation fails.

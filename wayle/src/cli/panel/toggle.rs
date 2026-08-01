@@ -1,5 +1,7 @@
-use crate::cli::dbus::{format_ipc_error, shell_ipc_proxy};
-use crate::cli::CliAction;
+use crate::cli::{
+    CliAction,
+    dbus::{format_ipc_error, shell_ipc_proxy},
+};
 
 pub async fn execute(monitor: Option<String>) -> CliAction {
     let (_connection, proxy) = shell_ipc_proxy().await?;

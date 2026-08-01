@@ -32,8 +32,9 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
     - `wayle dropdown close` closes all dropdowns (including systray dropdowns)
     - `wayle systray {open, toggle}` functions similarly, opening/closing systray right-click menus by ID.
     - The above open/toggle/close commands all act on the currently active monitor by default (this is determined in a compositor-specific way; they act on all monitors as a fallback). This can be overridden by passing `--monitor=<name>` (to act on a specific monitor) or `--monitor=all` (to act on all monitors).
-- Better heuristics to reduce button resize jitter. [339](https://github.com/wayle-rs/wayle/pull/339)
-- Module for Mullvad VPN control/status. [341](https://github.com/wayle-rs/wayle/pull/341) [43](https://github.com/wayle-rs/wayle-services/pull/43)
+- Better heuristics to reduce button resize jitter. [#339](https://github.com/wayle-rs/wayle/pull/339)
+- Module for Mullvad VPN control/status. [#341](https://github.com/wayle-rs/wayle/pull/341) [#43](https://github.com/wayle-rs/wayle-services/pull/43)
+- CLI for controlling OSD [#343](https://github.com/wayle-rs/wayle/pull/343)
 
 Roadmap:
 - Squash bugs in Media module's mpris2 controls [#156](https://github.com/wayle-rs/wayle/issues/156)

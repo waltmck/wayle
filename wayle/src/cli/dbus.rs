@@ -1,6 +1,10 @@
 //! Shared D-Bus utilities for CLI commands.
 
+use wayle_ipc::shell_ipc::ShellIpcProxy;
 use zbus::{Connection, Error as ZbusError, fdo::Error as FdoError};
+
+/// Label used when reporting `com.wayle.Shell1` failures.
+const SHELL_SERVICE_NAME: &str = "Shell";
 
 /// Establishes a D-Bus session connection.
 ///
@@ -10,6 +14,28 @@ pub async fn session() -> Result<Connection, String> {
     Connection::session()
         .await
         .map_err(|e| format!("Failed to connect to D-Bus session bus: {e}"))
+}
+
+/// Creates a proxy for the shell's `com.wayle.Shell1` interface.
+///
+/// The connection is returned alongside the proxy because dropping it would
+/// invalidate the proxy.
+///
+/// # Errors
+/// Returns error if D-Bus connection or proxy creation fails.
+pub async fn shell_ipc_proxy() -> Result<(Connection, ShellIpcProxy<'static>), String> {
+    let connection = session().await?;
+
+    let proxy = ShellIpcProxy::new(&connection)
+        .await
+        .map_err(|err| format!("cannot create shell IPC proxy: {err}"))?;
+
+    Ok((connection, proxy))
+}
+
+/// Formats a shell IPC D-Bus error for CLI output.
+pub fn format_shell_error(operation: &str, error: ZbusError) -> String {
+    format_error(SHELL_SERVICE_NAME, operation, error)
 }
 
 /// Formats D-Bus errors into user-friendly messages.

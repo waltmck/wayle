@@ -96,16 +96,10 @@ pub async fn wait_for_shutdown(connection: &Connection) -> Result<(), String> {
 ///
 /// Returns error if D-Bus connection or proxy creation fails.
 pub async fn shell_ipc_proxy() -> Result<(Connection, ShellIpcProxy<'static>), String> {
-    let connection = connect().await?;
-
-    let proxy = ShellIpcProxy::new(&connection)
-        .await
-        .map_err(|err| format!("cannot create shell IPC proxy: {err}"))?;
-
-    Ok((connection, proxy))
+    dbus::shell_ipc_proxy().await
 }
 
 /// Formats a shell IPC D-Bus error for CLI output.
 pub fn format_ipc_error(operation: &str, error: ZbusError) -> String {
-    dbus::format_error("Shell", operation, error)
+    dbus::format_shell_error(operation, error)
 }

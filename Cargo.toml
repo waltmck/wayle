@@ -159,6 +159,7 @@ wayle-iwd  = { git = "https://github.com/waltmck/wayle-services", branch = "mast
 wayle-mullvad  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 wayle-notification  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 wayle-portal  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
+wayle-media  = { git = "https://github.com/waltmck/wayle-services", branch = "master" }
 
 # Build against local wayle-services checkout (uncomment to use):
 # wayle-systray = { path = "/home/waltmck/src/wayle-services/wayle-systray" }
@@ -168,3 +169,4 @@ wayle-portal  = { git = "https://github.com/waltmck/wayle-services", branch = "m
 # wayle-mullvad  = { path = "/home/waltmck/src/wayle-services/wayle-mullvad" }
 # wayle-notification  = { path = "/home/waltmck/src/wayle-services/wayle-notification" }
 # wayle-portal  = { path = "/home/waltmck/src/wayle-services/wayle-portal" }
+# wayle-media  = { path = "/home/waltmck/src/wayle-services/wayle-media" }

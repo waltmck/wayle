@@ -35,9 +35,9 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
 - Better heuristics to reduce button resize jitter. [#339](https://github.com/wayle-rs/wayle/pull/339)
 - Module for Mullvad VPN control/status. [#341](https://github.com/wayle-rs/wayle/pull/341) [#43](https://github.com/wayle-rs/wayle-services/pull/43)
 - CLI for controlling OSD [#343](https://github.com/wayle-rs/wayle/pull/343)
+- Fixes [#156](https://github.com/wayle-rs/wayle/issues/156) and other miscellaneous bugs in Media module 
 
 Roadmap:
-- Squash bugs in Media module's mpris2 controls [#156](https://github.com/wayle-rs/wayle/issues/156)
 - Implement modules:
   - Syncthing (sync status, etc.)
   - systemd-networkd (exposes dbus API to get/set status of managed interfaces). Need to think about how this can/should interface with Network module

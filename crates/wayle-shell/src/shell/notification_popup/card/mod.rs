@@ -7,7 +7,10 @@ use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 use wayle_config::{
     ConfigService,
-    schemas::modules::notification::{IconSource, PopupCloseBehavior, UrgencyBarThreshold},
+    schemas::{
+        general::ColorIconMode,
+        modules::notification::{IconSource, PopupCloseBehavior, UrgencyBarThreshold},
+    },
 };
 use wayle_notification::core::notification::Notification;
 
@@ -51,7 +54,7 @@ pub(crate) struct NotificationPopupCard {
     app_label: String,
     time_label: String,
     icon_source: IconSource,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
     urgency_bar: UrgencyBarThreshold,
     icon: Option<gtk::Image>,
     icon_container: Option<gtk::Box>,
@@ -160,8 +163,8 @@ impl Component for NotificationPopupCard {
     ) -> ComponentParts<Self> {
         let notif = &init.notification;
 
-        let prefer_color = init.config.config().general.prefer_color_icons.get();
-        let resolved_icon = resolve_notification_icon(init.icon_source, notif, prefer_color);
+        let color_icons = init.config.config().general.color_icons.get();
+        let resolved_icon = resolve_notification_icon(init.icon_source, notif, color_icons);
 
         let app_label = notif
             .view.get().origin
@@ -178,7 +181,7 @@ impl Component for NotificationPopupCard {
             app_label,
             time_label,
             icon_source: init.icon_source,
-            prefer_color,
+            color_icons,
             urgency_bar: init.urgency_bar,
             icon: None,
             icon_container: None,

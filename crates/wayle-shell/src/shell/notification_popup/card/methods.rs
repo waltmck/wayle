@@ -203,7 +203,7 @@ impl NotificationPopupCard {
     /// refresh declaratively via `#[watch]`.
     pub(super) fn refresh_notification(&mut self, root: &gtk::Box) {
         self.resolved_icon =
-            resolve_notification_icon(self.icon_source, &self.notification, self.prefer_color);
+            resolve_notification_icon(self.icon_source, &self.notification, self.color_icons);
         self.app_label = self
             .notification
             .view.get().origin

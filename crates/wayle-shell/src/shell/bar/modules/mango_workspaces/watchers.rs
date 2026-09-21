@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use wayle_config::{
     ConfigProperty, SubscribeChanges,
     schemas::{
+        general::ColorIconMode,
         modules::MangoWorkspacesConfig,
         styling::{ScaleFactor, ThemeProvider},
     },
@@ -24,7 +25,7 @@ pub(super) fn spawn_watchers(
     mango: Arc<MangoService>,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    prefer_color: ConfigProperty<bool>,
+    color_icons: ConfigProperty<ColorIconMode>,
     settings: &BarSettings,
 ) {
     spawn_service_watcher(sender, mango);
@@ -33,7 +34,7 @@ pub(super) fn spawn_watchers(
         config,
         theme_provider,
         bar_scale,
-        prefer_color,
+        color_icons,
         settings,
     );
 }
@@ -76,7 +77,7 @@ fn spawn_config_watcher(
     config: &MangoWorkspacesConfig,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    prefer_color: ConfigProperty<bool>,
+    color_icons: ConfigProperty<ColorIconMode>,
     settings: &BarSettings,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -84,7 +85,7 @@ fn spawn_config_watcher(
     config.subscribe_changes(tx.clone());
     theme_provider.subscribe_changes(tx.clone());
     bar_scale.subscribe_changes(tx.clone());
-    prefer_color.subscribe_changes(tx.clone());
+    color_icons.subscribe_changes(tx.clone());
     settings.border_width.subscribe_changes(tx.clone());
     settings.border_location.subscribe_changes(tx.clone());
     settings.is_vertical.subscribe_changes(tx);

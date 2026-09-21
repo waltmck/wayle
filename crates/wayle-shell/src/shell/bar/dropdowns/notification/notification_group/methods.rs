@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use wayle_config::schemas::modules::notification::IconSource;
+use wayle_config::schemas::{general::ColorIconMode, modules::notification::IconSource};
 use wayle_notification::core::notification::Notification;
 
 use super::{super::notification_item::messages::NotificationItemInit, NotificationGroup};
@@ -45,7 +45,7 @@ impl NotificationGroup {
         let inits: Vec<_> = remaining
             .iter()
             .map(|notification| {
-                build_item_init(self.icon_source, self.prefer_color, notification)
+                build_item_init(self.icon_source, self.color_icons, notification)
             })
             .collect();
 
@@ -61,11 +61,11 @@ impl NotificationGroup {
 
     pub(super) fn resolve_group_icon(
         _icon_source: IconSource,
-        prefer_color: bool,
+        color_icons: ColorIconMode,
         notifications: &[Arc<Notification>],
     ) -> Option<String> {
         let first = notifications.first()?;
-        let resolved = resolve_notification_icon(IconSource::Mapped, first, prefer_color);
+        let resolved = resolve_notification_icon(IconSource::Mapped, first, color_icons);
 
         match resolved {
             ResolvedIcon::Named(name) => Some(name),
@@ -111,7 +111,7 @@ impl NotificationGroup {
         // `visible`. Items whose notification persists keep their existing widget and
         // reactive watchers rather than being destroyed and rebuilt.
         let icon_source = self.icon_source;
-        let prefer_color = self.prefer_color;
+        let color_icons = self.color_icons;
         let mut guard = self.items.guard();
 
         for idx in (0..guard.len()).rev() {
@@ -140,7 +140,7 @@ impl NotificationGroup {
                 None => {
                     guard.insert(
                         target_idx,
-                        build_item_init(icon_source, prefer_color, notification),
+                        build_item_init(icon_source, color_icons, notification),
                     );
                 }
             }
@@ -150,15 +150,15 @@ impl NotificationGroup {
 
 fn build_item_init(
     icon_source: IconSource,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
     notification: &Arc<Notification>,
 ) -> NotificationItemInit {
-    let resolved_icon = resolve_notification_icon(icon_source, notification, prefer_color);
+    let resolved_icon = resolve_notification_icon(icon_source, notification, color_icons);
 
     NotificationItemInit {
         notification: notification.clone(),
         resolved_icon,
         icon_source,
-        prefer_color,
+        color_icons,
     }
 }

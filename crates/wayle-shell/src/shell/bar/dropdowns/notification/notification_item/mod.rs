@@ -7,7 +7,7 @@ use std::sync::Arc;
 use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 use tokio_util::sync::CancellationToken;
-use wayle_config::schemas::modules::notification::IconSource;
+use wayle_config::schemas::{general::ColorIconMode, modules::notification::IconSource};
 use wayle_notification::core::notification::Notification;
 
 use self::messages::{NotificationItemInit, NotificationItemInput};
@@ -20,7 +20,7 @@ pub(crate) struct NotificationItem {
 
     resolved_icon: ResolvedIcon,
     icon_source: IconSource,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
     time_label: String,
 
     root: Option<gtk::Box>,
@@ -135,7 +135,7 @@ impl FactoryComponent for NotificationItem {
             notification: init.notification,
             resolved_icon: init.resolved_icon,
             icon_source: init.icon_source,
-            prefer_color: init.prefer_color,
+            color_icons: init.color_icons,
             time_label,
             root: None,
             main_row: None,

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use wayle_config::schemas::modules::WorkspaceStyle;
+use wayle_config::schemas::{general::ColorIconMode, modules::WorkspaceStyle};
 
 use crate::{
     glob,
@@ -35,7 +35,7 @@ pub(super) fn resolve_app_icon(
     title: Option<&str>,
     user_map: &HashMap<String, String>,
     fallback: &str,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
 ) -> String {
     let (title_entries, app_entries): (Vec<_>, Vec<_>) = user_map
         .iter()
@@ -55,8 +55,9 @@ pub(super) fn resolve_app_icon(
         return icon.to_string();
     }
 
-    // Prefer the app's full-colour desktop icon over the built-in symbolic mapping when asked.
-    if prefer_color
+    // In `prefer` mode the app's full-colour desktop icon wins over the built-in
+    // symbolic mapping.
+    if color_icons == ColorIconMode::Prefer
         && let Some(color) = color_desktop_icon(app_id)
     {
         return color;
@@ -66,9 +67,17 @@ pub(super) fn resolve_app_icon(
         return icon.to_string();
     }
 
-    // Fall back to the app's symbolic desktop icon if one exists (always attempted).
+    // Fall back to the app's symbolic desktop icon if one exists.
     if let Some(symbolic) = symbolic_desktop_icon(app_id) {
         return symbolic;
+    }
+
+    // In `fallback` mode a colour icon beats the generic fallback once symbolic
+    // resolution has failed.
+    if color_icons == ColorIconMode::Fallback
+        && let Some(color) = color_desktop_icon(app_id)
+    {
+        return color;
     }
 
     fallback.to_string()
@@ -128,7 +137,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(String::from("*firefox*"), String::from("ld-globe"));
         assert_eq!(
-            resolve_app_icon(Some("org.mozilla.firefox"), None, &map, "fallback", false),
+            resolve_app_icon(Some("org.mozilla.firefox"), None, &map, "fallback", ColorIconMode::Never),
             "ld-globe",
         );
     }
@@ -144,7 +153,7 @@ mod tests {
                 Some("YouTube - Firefox"),
                 &map,
                 "fallback",
-                false,
+                ColorIconMode::Never,
             ),
             "si-youtube",
         );
@@ -154,7 +163,7 @@ mod tests {
     fn resolve_app_icon_falls_back_when_no_match() {
         let map = HashMap::new();
         assert_eq!(
-            resolve_app_icon(Some("unknown.app"), Some("Unknown"), &map, "ld-default", false),
+            resolve_app_icon(Some("unknown.app"), Some("Unknown"), &map, "ld-default", ColorIconMode::Never),
             "ld-default",
         );
     }

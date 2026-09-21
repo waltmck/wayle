@@ -3,7 +3,7 @@ mod types;
 use schemars::schema_for;
 use wayle_derive::wayle_config;
 
-pub use self::types::Layer;
+pub use self::types::{ColorIconMode, Layer};
 use crate::{
     ConfigProperty,
     docs::{ConfigGroup, GroupDefaults, ModuleInfo, ModuleInfoProvider},
@@ -30,16 +30,17 @@ pub struct GeneralConfig {
     #[default(false)]
     pub tearing_mode: ConfigProperty<bool>,
 
-    /// Prefer full-colour app icons over symbolic ones for notifications and workspaces.
+    /// When to use full-colour app icons for notifications and workspaces.
     ///
-    /// When enabled, the notification and workspace modules use an app's colour
-    /// icon when one exists, falling back to a symbolic icon (including the built-in
-    /// symbolic mappings) only when no colour icon is available. When disabled
-    /// (the default), those modules prefer symbolic icons. Either way, modules
-    /// fall back to an app's symbolic desktop-entry icon before the generic icon.
-    #[serde(rename = "prefer-color-icons")]
-    #[default(false)]
-    pub prefer_color_icons: ConfigProperty<bool>,
+    /// `never` sticks to symbolic icons (built-in mappings, then the app's
+    /// symbolic desktop-entry icon), showing the generic fallback icon when
+    /// neither resolves. `fallback` (the default) does the same but uses the
+    /// app's colour icon instead of the generic fallback when symbolic
+    /// resolution fails. `prefer` uses the app's colour icon whenever one
+    /// exists, falling back to symbolic icons otherwise.
+    #[serde(rename = "color-icons")]
+    #[default(ColorIconMode::default())]
+    pub color_icons: ConfigProperty<ColorIconMode>,
 }
 
 impl ModuleInfoProvider for GeneralConfig {

@@ -13,6 +13,7 @@ use wayle_config::{
     ClickAction,
     schemas::{
         bar::BorderLocation,
+        general::ColorIconMode,
         modules::{
             ActiveIndicator, DisplayMode, LabelStrategy, NiriWorkspaceMap, UrgentMode,
             WorkspaceClickAction,
@@ -54,7 +55,7 @@ impl NiriWorkspaces {
         let config = self.config.config();
         let ws_config = &config.modules.niri_workspaces;
 
-        let prefer_color = config.general.prefer_color_icons.get();
+        let color_icons = config.general.color_icons.get();
         let ignore_patterns = ws_config.workspace_ignore.get();
         let ctx = FilterContext {
             monitor_specific: ws_config.monitor_specific.get(),
@@ -97,7 +98,7 @@ impl NiriWorkspaces {
             app_icons_fallback: ws_config.app_icons_fallback.get(),
             app_icon_map: ws_config.app_icon_map.get(),
             workspace_map: ws_config.workspace_map.get(),
-            prefer_color,
+            color_icons,
             blink_on: self.blink_on,
         };
 
@@ -261,7 +262,7 @@ struct ButtonLayout {
     app_icons_fallback: String,
     app_icon_map: BTreeMap<String, String>,
     workspace_map: NiriWorkspaceMap,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
     blink_on: bool,
 }
 
@@ -322,7 +323,7 @@ fn collect_app_icons(
     app_icon_map: &BTreeMap<String, String>,
     fallback: &str,
     dedupe: bool,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
 ) -> Vec<AppIconInit> {
     let mut result: Vec<AppIconInit> = Vec::with_capacity(windows.len());
     for window in windows {
@@ -331,7 +332,7 @@ fn collect_app_icons(
             window.title.get().as_deref(),
             app_icon_map,
             fallback,
-            prefer_color,
+            color_icons,
         );
         let window_id = window.id.get();
         if dedupe && let Some(existing) = result.iter_mut().find(|init| init.icon_name == icon_name)
@@ -364,7 +365,7 @@ fn build_button_init(
             &layout.app_icon_map,
             &layout.app_icons_fallback,
             layout.app_icons_dedupe,
-            layout.prefer_color,
+            layout.color_icons,
         )
     } else {
         Vec::new()

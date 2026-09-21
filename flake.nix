@@ -181,7 +181,11 @@
         ];
 
         environment = {
-          etc."wayle/config.toml".source = (pkgs.formats.toml {}).generate "wayle-config" cfg.settings;
+          # Only materialize a config when settings are given; otherwise wayle
+          # falls back to ~/.config/wayle/config.toml.
+          etc = mkIf (cfg.settings != {}) {
+            "wayle/config.toml".source = (pkgs.formats.toml {}).generate "wayle-config" cfg.settings;
+          };
 
           systemPackages = [cfg.package];
         };
@@ -210,7 +214,7 @@
           };
 
           serviceConfig = {
-            ExecStart = "${cfg.package}/bin/wayle shell --config /etc/wayle/config.toml";
+            ExecStart = "${cfg.package}/bin/wayle shell${lib.optionalString (cfg.settings != {}) " --config /etc/wayle/config.toml"}";
             Restart = "on-failure";
 
             Type = "notify";

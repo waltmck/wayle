@@ -3,9 +3,9 @@ use wayle_derive::wayle_enum;
 /// When to use full-colour app icons instead of symbolic ones.
 #[wayle_enum(default)]
 pub enum ColorIconMode {
-    /// Never use colour icons; unresolved apps get the generic fallback icon.
+    /// Never use colour icons; only symbolic sources are consulted.
     Never,
-    /// Use a colour icon only when no symbolic icon can be resolved.
+    /// Use the theme's colour icon only when it has no symbolic icon for the app.
     #[default]
     Fallback,
     /// Use colour icons first, falling back to symbolic ones when none exists.

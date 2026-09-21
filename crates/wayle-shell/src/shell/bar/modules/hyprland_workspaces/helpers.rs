@@ -57,31 +57,31 @@ pub(crate) fn resolve_app_icon(window: &WindowInfo<'_>, ctx: &IconContext<'_>) -
         }
     }
 
-    // In `prefer` mode the app's full-colour desktop icon wins over the built-in
-    // symbolic mapping.
+    // Theme resolution via the app's desktop entry: in `prefer` mode the
+    // full-colour icon wins over the symbolic variant.
     if ctx.color_icons == ColorIconMode::Prefer
         && let Some(color) = color_desktop_icon(window.class)
     {
         return color;
     }
 
-    for (pattern, icon) in DEFAULT_APP_ICON_MAP {
-        if matches_glob(window.class, &pattern.to_lowercase()) {
-            return (*icon).to_string();
-        }
-    }
-
-    // Fall back to the app's symbolic desktop icon if one exists.
     if let Some(symbolic) = symbolic_desktop_icon(window.class) {
         return symbolic;
     }
 
-    // In `fallback` mode a colour icon beats the generic fallback once symbolic
-    // resolution has failed.
+    // In `fallback` mode the colour icon steps in when the theme has no
+    // symbolic variant.
     if ctx.color_icons == ColorIconMode::Fallback
         && let Some(color) = color_desktop_icon(window.class)
     {
         return color;
+    }
+
+    // Built-in mappings are a last resort after theme resolution.
+    for (pattern, icon) in DEFAULT_APP_ICON_MAP {
+        if matches_glob(window.class, &pattern.to_lowercase()) {
+            return (*icon).to_string();
+        }
     }
 
     ctx.fallback.to_string()

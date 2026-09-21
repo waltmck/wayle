@@ -161,6 +161,7 @@ pub(crate) const DEFAULT_APP_ICON_MAP: &[(&str, &str)] = &[
     ("*jellyfin*", "si-jellyfin-symbolic"),
     ("*lollypop*", "ld-music-symbolic"),
     ("*mpv*", "si-mpv-symbolic"),
+    ("music player daemon", "ld-music-symbolic"),
     ("*nuclear*", "ld-music-symbolic"),
     ("*plex*", "si-plex-symbolic"),
     ("*rhythmbox*", "ld-music-symbolic"),

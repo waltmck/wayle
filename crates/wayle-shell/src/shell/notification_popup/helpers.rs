@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use relm4::gtk::{gdk, glib, pango};
-use wayle_config::schemas::modules::notification::{IconSource, UrgencyBarThreshold};
+use wayle_config::schemas::{
+    general::ColorIconMode,
+    modules::notification::{IconSource, UrgencyBarThreshold},
+};
 use wayle_notification::types::Urgency;
 
 use crate::shell::bar::icons::{color_desktop_icon, lookup_app_icon, symbolic_desktop_icon};
@@ -77,17 +80,17 @@ pub(crate) fn resolve_icon(
     app_icon: &Option<String>,
     image_path: &Option<String>,
     desktop_entry: &Option<String>,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
 ) -> ResolvedIcon {
     match icon_source {
-        IconSource::Mapped => mapped_icon(app_name, desktop_entry, prefer_color),
+        IconSource::Mapped => mapped_icon(app_name, desktop_entry, color_icons),
 
         IconSource::Automatic => {
             if let Some(resolved) = try_icon_string(image_path) {
                 return resolved;
             }
 
-            mapped_icon(app_name, desktop_entry, prefer_color)
+            mapped_icon(app_name, desktop_entry, color_icons)
         }
 
         IconSource::Application => {
@@ -105,7 +108,7 @@ pub(crate) fn resolve_icon(
                 return ResolvedIcon::Named(entry.clone());
             }
 
-            mapped_icon(app_name, desktop_entry, prefer_color)
+            mapped_icon(app_name, desktop_entry, color_icons)
         }
     }
 }
@@ -126,16 +129,16 @@ fn try_icon_string(value: &Option<String>) -> Option<ResolvedIcon> {
 fn mapped_icon(
     app_name: &Option<String>,
     desktop_entry: &Option<String>,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
 ) -> ResolvedIcon {
     let identifier = desktop_entry
         .as_deref()
         .filter(|entry| !entry.is_empty())
         .or(app_name.as_deref());
 
-    // When colour icons are preferred, an app's full-colour desktop icon wins over the
-    // built-in symbolic mapping; only if there is none do we fall through to symbolic.
-    if prefer_color
+    // In `prefer` mode an app's full-colour desktop icon wins over the built-in
+    // symbolic mapping; only if there is none do we fall through to symbolic.
+    if color_icons == ColorIconMode::Prefer
         && let Some(id) = identifier
         && let Some(color) = color_desktop_icon(id)
     {
@@ -146,12 +149,20 @@ fn mapped_icon(
         return ResolvedIcon::Named(String::from(name));
     }
 
-    // Fall back to the app's symbolic desktop icon if one exists (previously gated behind
-    // the removed `symbolic-icon-fallback` option — now always attempted).
+    // Fall back to the app's symbolic desktop icon if one exists.
     if let Some(id) = identifier
         && let Some(symbolic) = symbolic_desktop_icon(id)
     {
         return ResolvedIcon::Named(symbolic);
+    }
+
+    // In `fallback` mode a colour icon beats the generic fallback once symbolic
+    // resolution has failed.
+    if color_icons == ColorIconMode::Fallback
+        && let Some(id) = identifier
+        && let Some(color) = color_desktop_icon(id)
+    {
+        return ResolvedIcon::Named(color);
     }
 
     ResolvedIcon::Named(String::from(FALLBACK_ICON))

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gtk::prelude::*;
 use relm4::{gtk, prelude::*};
-use wayle_config::schemas::modules::notification::IconSource;
+use wayle_config::schemas::{general::ColorIconMode, modules::notification::IconSource};
 use wayle_notification::core::notification::Notification;
 
 use self::messages::{NotificationGroupInit, NotificationGroupInput, NotificationGroupOutput};
@@ -25,7 +25,7 @@ pub(crate) struct NotificationGroup {
     total_count: usize,
 
     icon_source: IconSource,
-    prefer_color: bool,
+    color_icons: ColorIconMode,
     group_icon: Option<String>,
 
     items: FactoryVecDeque<NotificationItem>,
@@ -172,7 +172,7 @@ impl FactoryComponent for NotificationGroup {
             });
 
         let group_icon =
-            Self::resolve_group_icon(init.icon_source, init.prefer_color, &init.notifications);
+            Self::resolve_group_icon(init.icon_source, init.color_icons, &init.notifications);
 
         let mut model = Self {
             app_name: init.app_name,
@@ -182,7 +182,7 @@ impl FactoryComponent for NotificationGroup {
             overflow_count: 0,
             total_count: 0,
             icon_source: init.icon_source,
-            prefer_color: init.prefer_color,
+            color_icons: init.color_icons,
             group_icon,
             items,
             notifications: Vec::new(),
@@ -246,7 +246,7 @@ impl FactoryComponent for NotificationGroup {
 
             NotificationGroupInput::UpdateNotifications(notifications) => {
                 self.group_icon =
-                    Self::resolve_group_icon(self.icon_source, self.prefer_color, &notifications);
+                    Self::resolve_group_icon(self.icon_source, self.color_icons, &notifications);
                 self.reconcile_items(notifications);
             }
 

@@ -6,6 +6,7 @@ use tracing::warn;
 use wayle_config::{
     ConfigProperty,
     schemas::{
+        general::ColorIconMode,
         modules::HyprlandWorkspacesConfig,
         styling::{ScaleFactor, ThemeProvider},
     },
@@ -22,7 +23,7 @@ pub(super) fn spawn_watchers(
     hyprland: &Option<Arc<HyprlandService>>,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    prefer_color: ConfigProperty<bool>,
+    color_icons: ConfigProperty<ColorIconMode>,
     settings: &BarSettings,
 ) {
     spawn_hyprland_watchers(sender, hyprland);
@@ -31,7 +32,7 @@ pub(super) fn spawn_watchers(
         config,
         theme_provider,
         bar_scale,
-        prefer_color,
+        color_icons,
         settings,
     );
 }
@@ -152,7 +153,7 @@ fn spawn_config_watchers(
     config: &HyprlandWorkspacesConfig,
     theme_provider: ConfigProperty<ThemeProvider>,
     bar_scale: ConfigProperty<ScaleFactor>,
-    prefer_color: ConfigProperty<bool>,
+    color_icons: ConfigProperty<ColorIconMode>,
     settings: &BarSettings,
 ) {
     let min_count = config.min_workspace_count.clone();
@@ -216,7 +217,7 @@ fn spawn_config_watchers(
             app_icon_map.watch(),
             theme_provider.watch(),
             bar_scale.watch(),
-            prefer_color.watch(),
+            color_icons.watch(),
             border_width.watch(),
             border_location.watch(),
             is_vertical.watch()

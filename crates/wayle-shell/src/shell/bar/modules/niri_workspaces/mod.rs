@@ -68,7 +68,7 @@ impl Component for NiriWorkspaces {
         let workspaces_config = &config.modules.niri_workspaces;
         let theme_provider = config.styling.theme_provider.clone();
         let bar_scale = config.bar.scale.clone();
-        let prefer_color = config.general.prefer_color_icons.clone();
+        let color_icons = config.general.color_icons.clone();
 
         watchers::spawn_watchers(
             &sender,
@@ -76,7 +76,7 @@ impl Component for NiriWorkspaces {
             init.niri.clone(),
             theme_provider,
             bar_scale,
-            prefer_color,
+            color_icons,
             &init.settings,
         );
 

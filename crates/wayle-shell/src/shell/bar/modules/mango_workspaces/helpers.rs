@@ -28,8 +28,9 @@ pub(super) fn tag_style(
 /// Resolves the icon name for a client using the configured icon map.
 ///
 /// Lookup order: `title:`-prefixed patterns against the title, then app-prefixed
-/// or unprefixed patterns against the app id, then the built-in defaults. Falls
-/// back to `fallback` when nothing matches.
+/// or unprefixed patterns against the app id, then the app's desktop-entry icon
+/// from the icon theme (colour or symbolic first depending on `color_icons`),
+/// then the built-in mappings, and finally `fallback`.
 pub(super) fn resolve_app_icon(
     app_id: Option<&str>,
     title: Option<&str>,
@@ -55,29 +56,29 @@ pub(super) fn resolve_app_icon(
         return icon.to_string();
     }
 
-    // In `prefer` mode the app's full-colour desktop icon wins over the built-in
-    // symbolic mapping.
+    // Theme resolution via the app's desktop entry: in `prefer` mode the
+    // full-colour icon wins over the symbolic variant.
     if color_icons == ColorIconMode::Prefer
         && let Some(color) = color_desktop_icon(app_id)
     {
         return color;
     }
 
-    if let Some(icon) = glob::find_match(DEFAULT_APP_ICON_MAP.iter().copied(), app_id) {
-        return icon.to_string();
-    }
-
-    // Fall back to the app's symbolic desktop icon if one exists.
     if let Some(symbolic) = symbolic_desktop_icon(app_id) {
         return symbolic;
     }
 
-    // In `fallback` mode a colour icon beats the generic fallback once symbolic
-    // resolution has failed.
+    // In `fallback` mode the colour icon steps in when the theme has no
+    // symbolic variant.
     if color_icons == ColorIconMode::Fallback
         && let Some(color) = color_desktop_icon(app_id)
     {
         return color;
+    }
+
+    // Built-in mappings are a last resort after theme resolution.
+    if let Some(icon) = glob::find_match(DEFAULT_APP_ICON_MAP.iter().copied(), app_id) {
+        return icon.to_string();
     }
 
     fallback.to_string()

@@ -90,10 +90,9 @@ pub(super) fn is_ignored(name: Option<&str>, idx: u8, id: u64, patterns: &[Strin
 /// Resolves the icon name for a window using the configured icon map.
 ///
 /// Lookup order: title-prefixed patterns against `title`, then app-prefixed
-/// or unprefixed patterns against `app_id`. When `color_icons` is set, the app's
-/// full-colour desktop icon is preferred over the built-in symbolic map; otherwise
-/// the built-in map wins. If nothing matched, the app's symbolic desktop icon is
-/// always tried before falling back to `fallback`.
+/// or unprefixed patterns against `app_id`, then the app's desktop-entry icon
+/// from the icon theme (colour or symbolic first depending on `color_icons`),
+/// then the built-in mappings, and finally `fallback`.
 pub(super) fn resolve_app_icon(
     app_id: Option<&str>,
     title: Option<&str>,
@@ -119,29 +118,29 @@ pub(super) fn resolve_app_icon(
         return icon.to_string();
     }
 
-    // In `prefer` mode the app's full-colour desktop icon wins over the built-in
-    // symbolic mapping.
+    // Theme resolution via the app's desktop entry: in `prefer` mode the
+    // full-colour icon wins over the symbolic variant.
     if color_icons == ColorIconMode::Prefer
         && let Some(color) = color_desktop_icon(app_id)
     {
         return color;
     }
 
-    if let Some(icon) = glob::find_match(DEFAULT_APP_ICON_MAP.iter().copied(), app_id) {
-        return icon.to_string();
-    }
-
-    // Fall back to the app's symbolic desktop icon if one exists.
     if let Some(symbolic) = symbolic_desktop_icon(app_id) {
         return symbolic;
     }
 
-    // In `fallback` mode a colour icon beats the generic fallback once symbolic
-    // resolution has failed.
+    // In `fallback` mode the colour icon steps in when the theme has no
+    // symbolic variant.
     if color_icons == ColorIconMode::Fallback
         && let Some(color) = color_desktop_icon(app_id)
     {
         return color;
+    }
+
+    // Built-in mappings are a last resort after theme resolution.
+    if let Some(icon) = glob::find_match(DEFAULT_APP_ICON_MAP.iter().copied(), app_id) {
+        return icon.to_string();
     }
 
     fallback.to_string()

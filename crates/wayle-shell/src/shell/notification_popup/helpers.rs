@@ -253,8 +253,8 @@ fn mapped_icon(
         .filter(|entry| !entry.is_empty())
         .or(app_name.as_deref());
 
-    // In `prefer` mode an app's full-colour desktop icon wins over the built-in
-    // symbolic mapping; only if there is none do we fall through to symbolic.
+    // Theme resolution via the app's desktop entry: in `prefer` mode the
+    // full-colour icon wins over the symbolic variant.
     if color_icons == ColorIconMode::Prefer
         && let Some(id) = identifier
         && let Some(color) = color_desktop_icon(id)
@@ -262,24 +262,24 @@ fn mapped_icon(
         return ResolvedIcon::Named(color);
     }
 
-    if let Some(name) = app_name.as_deref().and_then(lookup_app_icon) {
-        return ResolvedIcon::Named(String::from(name));
-    }
-
-    // Fall back to the app's symbolic desktop icon if one exists.
     if let Some(id) = identifier
         && let Some(symbolic) = symbolic_desktop_icon(id)
     {
         return ResolvedIcon::Named(symbolic);
     }
 
-    // In `fallback` mode a colour icon beats the generic fallback once symbolic
-    // resolution has failed.
+    // In `fallback` mode the colour icon steps in when the theme has no
+    // symbolic variant.
     if color_icons == ColorIconMode::Fallback
         && let Some(id) = identifier
         && let Some(color) = color_desktop_icon(id)
     {
         return ResolvedIcon::Named(color);
+    }
+
+    // Built-in mappings are a last resort after theme resolution.
+    if let Some(name) = app_name.as_deref().and_then(lookup_app_icon) {
+        return ResolvedIcon::Named(String::from(name));
     }
 
     ResolvedIcon::Named(String::from(FALLBACK_ICON))

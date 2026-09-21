@@ -32,12 +32,11 @@ pub struct GeneralConfig {
 
     /// When to use full-colour app icons for notifications and workspaces.
     ///
-    /// `never` sticks to symbolic icons (built-in mappings, then the app's
-    /// symbolic desktop-entry icon), showing the generic fallback icon when
-    /// neither resolves. `fallback` (the default) does the same but uses the
-    /// app's colour icon instead of the generic fallback when symbolic
-    /// resolution fails. `prefer` uses the app's colour icon whenever one
-    /// exists, falling back to symbolic icons otherwise.
+    /// Icons resolve from the icon theme first (via the app's desktop entry),
+    /// then from the built-in symbolic mappings, then the generic fallback
+    /// icon. `never` only takes the theme's symbolic icon. `fallback` (the
+    /// default) also takes the theme's colour icon when no symbolic variant
+    /// exists. `prefer` takes the theme's colour icon first, then symbolic.
     #[serde(rename = "color-icons")]
     #[default(ColorIconMode::default())]
     pub color_icons: ConfigProperty<ColorIconMode>,

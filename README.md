@@ -36,6 +36,8 @@ This is a fork of Wayle for testing my experimental changes prior to upstreaming
 - Module for Mullvad VPN control/status. [#341](https://github.com/wayle-rs/wayle/pull/341) [#43](https://github.com/wayle-rs/wayle-services/pull/43)
 - CLI for controlling OSD [#343](https://github.com/wayle-rs/wayle/pull/343)
 - Fixes [#156](https://github.com/wayle-rs/wayle/issues/156) and other miscellaneous bugs in Media module 
+- Full rewrite of wayle-bluetooth to fix many race conditions and keep the UI in state with bluez [#373](https://github.com/wayle-rs/wayle/pull/373) [#48](https://github.com/wayle-rs/wayle-services/pull/48)
+- Click guards on menus to prevent accidental clicks when buttons move under your cursor (implemented in bluetooth and IWD modules)
 
 Roadmap:
 - Implement modules:

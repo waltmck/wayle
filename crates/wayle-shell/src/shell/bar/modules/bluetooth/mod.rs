@@ -25,7 +25,6 @@ use crate::shell::bar::dropdowns::DropdownOpener;
 pub(crate) struct BluetoothModule {
     bar_button: Controller<BarButton>,
     state_watcher: WatcherToken,
-    adapter_watcher: WatcherToken,
     bluetooth: DeferredService<BluetoothService>,
     config: Arc<ConfigService>,
     opener: DropdownOpener,
@@ -88,7 +87,6 @@ impl Component for BluetoothModule {
             });
 
         watchers::spawn_service_watcher(&sender, &init.bluetooth);
-        let adapter_watcher = WatcherToken::new();
         let state_watcher = WatcherToken::new();
 
         let opener = DropdownOpener::for_button(
@@ -100,7 +98,6 @@ impl Component for BluetoothModule {
         let model = Self {
             bar_button,
             state_watcher,
-            adapter_watcher,
             bluetooth: init.bluetooth,
             config: init.config,
             opener,
@@ -132,22 +129,12 @@ impl Component for BluetoothModule {
             BluetoothCmd::ServiceReady(bt) => {
                 let state_token = self.state_watcher.reset();
                 watchers::spawn_watchers(&sender, state_token, bt_config, &bt);
-                watchers::spawn_adapter_watchers(&sender, self.adapter_watcher.reset(), &bt);
 
                 self.update_display(bt_config, &Some(bt));
             }
 
             BluetoothCmd::StateChanged | BluetoothCmd::IconConfigChanged => {
                 self.update_display(bt_config, &self.bluetooth.get());
-            }
-
-            BluetoothCmd::AdapterChanged => {
-                let Some(bt) = self.bluetooth.get() else {
-                    return;
-                };
-
-                watchers::spawn_adapter_watchers(&sender, self.adapter_watcher.reset(), &bt);
-                self.update_display(bt_config, &Some(bt));
             }
         }
     }

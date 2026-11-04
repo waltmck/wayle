@@ -10,3 +10,4 @@ sandbox/
 # devenv
 .devenv/
 .direnv/
+.claude/
